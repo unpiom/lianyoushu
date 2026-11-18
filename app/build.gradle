@@ -1,0 +1,24 @@
+plugins {
+    id 'com.android.application' version '8.9.2'
+}
+
+layout.buildDirectory.set(rootProject.layout.projectDirectory.dir('.build/gradle-app'))
+
+android {
+    namespace 'com.lianji.fitlog'
+    compileSdk 35
+    buildToolsVersion '35.0.1'
+
+    defaultConfig {
+        applicationId 'com.lianji.fitlog'
+        minSdk 26
+        targetSdk 35
+        versionCode 6
+        versionName '1.2.2'
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

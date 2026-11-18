@@ -40,7 +40,7 @@ final class Ui {
     static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
 
-    enum Icon { HOME, SCALE, TRAINING, CHECK, CHEVRON, CALENDAR, TARGET, STEPS }
+    enum Icon { HOME, SCALE, TRAINING, CHECK, CHEVRON, CALENDAR, TARGET }
 
     private final Context context;
 
@@ -286,12 +286,6 @@ final class Ui {
                         canvas.drawCircle(12, 12, 9, paint);
                         canvas.drawCircle(12, 12, 5, paint);
                         canvas.drawCircle(12, 12, 1, paint);
-                        break;
-                    case STEPS:
-                        canvas.drawOval(4, 3, 9, 12, paint);
-                        canvas.drawOval(14, 10, 19, 19, paint);
-                        canvas.drawLine(7, 16, 7, 18, paint);
-                        canvas.drawLine(16, 5, 16, 7, paint);
                         break;
                 }
                 canvas.restore();

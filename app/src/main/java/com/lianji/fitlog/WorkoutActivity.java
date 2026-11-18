@@ -332,8 +332,9 @@ public final class WorkoutActivity extends Activity {
         ui.add(body, ui.text("可填入实际训练分钟数来调整计时。", 14, MUTED, false), 7);
         EditText adjusted = numberField("实际时长（分钟，可选）", InputType.TYPE_CLASS_NUMBER, 4);
         ui.add(body, adjusted, 9);
+        ui.add(body, ui.text(getString(R.string.check_in_lock_hint), 14, MUTED, false), 9);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("确认训练打卡").setView(body)
-                .setNegativeButton("取消", null).setPositiveButton("确认打卡", null).create();
+                .setNegativeButton(R.string.check_in_undo, null).setPositiveButton(R.string.check_in_confirm, null).create();
         dialog.show();
         body.requestFocus();
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(view -> {

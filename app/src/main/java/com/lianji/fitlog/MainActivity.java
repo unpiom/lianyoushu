@@ -4,12 +4,8 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
-import android.graphics.Typeface;
 import android.os.Bundle;
 import android.os.LocaleList;
-import android.text.SpannableString;
-import android.text.Spanned;
-import android.text.style.StyleSpan;
 import android.util.Log;
 import android.view.Gravity;
 import android.view.View;
@@ -47,8 +43,9 @@ public final class MainActivity extends Activity {
     private Ui ui;
     private Store store;
     private Editors editors;
-    private Steps steps;
     private Review review;
+    private PlanFiles planFiles;
+    private Updates updates;
     private ScrollView scroll;
     private LocalDate today;
     private LocalDate selectedDay;
@@ -74,8 +71,9 @@ public final class MainActivity extends Activity {
         ui = new Ui(this);
         store = new Store(this);
         editors = new Editors(this, ui, store);
-        steps = new Steps(this, ui, store, editors);
         review = new Review(this, ui, store, state);
+        planFiles = new PlanFiles(this);
+        updates = new Updates(this, state);
         int previousScroll = 0;
         if (state != null) {
             tab = state.getInt("tab", TODAY);
@@ -91,7 +89,11 @@ public final class MainActivity extends Activity {
         super.onResume();
         if (returning || !LocalDate.now().equals(today)) refresh();
         returning = false;
-        steps.reload(today);
+    }
+
+    @Override protected void onPostResume() {
+        super.onPostResume();
+        updates.showNewVersionAnnouncement();
     }
 
     @Override protected void onPause() {
@@ -105,10 +107,12 @@ public final class MainActivity extends Activity {
         state.putInt("historyLimit", historyLimit);
         state.putInt("scroll", scroll.getScrollY());
         review.save(state);
+        updates.save(state);
         super.onSaveInstanceState(state);
     }
 
     @Override protected void onDestroy() {
+        updates.close();
         store.close();
         super.onDestroy();
     }
@@ -118,15 +122,8 @@ public final class MainActivity extends Activity {
         if (requestCode == WORKOUT_REQUEST && resultCode == RESULT_OK && data != null) {
             trainingSaved(LocalDate.parse(data.getStringExtra(WorkoutActivity.DATE)));
         }
-    }
-
-    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-        super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode == Steps.REQUEST_PERMISSION) steps.reload(LocalDate.now());
-    }
-
-    void stepDataChanged() {
-        if (tab == TODAY && scroll != null) refresh();
+        if (requestCode == Updates.REQUEST_INSTALL_PERMISSION) updates.onInstallPermissionResult();
+        planFiles.onActivityResult(requestCode, resultCode, data);
     }
 
     void refresh() {
@@ -272,12 +269,7 @@ public final class MainActivity extends Activity {
         String average = Double.isNaN(weekAverage) ? "暂无" : kg(weekAverage) + " kg";
         ui.add(hero, ui.text("7 天均重  " + average, 14, PALE, false), 2);
 
-        String tip = "（建议每天早晨起床后空腹称体重！）";
-        SpannableString reminder = new SpannableString(tip);
-        reminder.setSpan(new StyleSpan(Typeface.BOLD), 3, tip.length() - 1, Spanned.SPAN_EXCLUSIVE_EXCLUSIVE);
-        TextView note = ui.text(tip, 12, PALE, false);
-        note.setText(reminder);
-        ui.add(hero, note, 9);
+        ui.add(hero, ui.text("(建议早晨起床，空腹称重!)", 12, PALE, true), 9);
 
         LinearLayout actions = ui.row();
         if (todayWeight == null) {
@@ -287,7 +279,6 @@ public final class MainActivity extends Activity {
                 editors::pickWeightDate), 1, todayWeight == null ? 9 : 0);
         ui.add(hero, actions, 12);
         ui.add(page, hero, 0);
-        ui.add(page, steps.card(today), 13);
 
         LinearLayout training = ui.card();
         showProgress(training, "本周训练");
@@ -305,7 +296,15 @@ public final class MainActivity extends Activity {
         }
         ui.add(page, training, 13);
         ui.add(page, forecastCard(), 13);
-        TextView privacy = ui.text("记录仅保存在本机 · 卸载后清除", 12, MUTED, false);
+        LinearLayout version = ui.row();
+        ui.weighted(version, ui.text("版本 " + updates.currentVersion(), 13, MUTED, false), 1, 0);
+        version.addView(ui.secondary("检查更新", updates::check));
+        ui.add(page, version, 13);
+        LinearLayout project = ui.row();
+        project.addView(ui.secondary("GitHub 项目主页", updates::openProject));
+        ui.weighted(project, ui.text("觉得好用，欢迎给项目点个 Star。", 13, MUTED, false), 1, 8);
+        ui.add(page, project, 8);
+        TextView privacy = ui.text("卸载会清除应用中的记录", 12, MUTED, false);
         privacy.setGravity(Gravity.CENTER);
         ui.add(page, privacy, 16);
     }
@@ -483,6 +482,10 @@ public final class MainActivity extends Activity {
         }
 
         ui.add(page, ui.heading("每周计划", 18), 18);
+        LinearLayout files = ui.row();
+        ui.weighted(files, ui.secondary("导入计划", planFiles::openImport), 1, 0);
+        ui.weighted(files, ui.secondary("导出计划", planFiles::openExport), 1, 8);
+        ui.add(page, files, 8);
         LinearLayout rules = ui.card();
         if (plans.isEmpty()) ui.add(rules, ui.text("新建计划后，会按指定星期每周重复。", 14, MUTED, false), 0);
         for (Journal.Plan plan : plans) {
@@ -560,8 +563,7 @@ public final class MainActivity extends Activity {
                 ui.add(card, row, 6);
             }
         }
-        if (session.done) ui.add(card, ui.secondary("撤销打卡", () -> editors.undo(session)), 10);
-        else if (!session.date.isAfter(today)) {
+        if (!session.done && !session.date.isAfter(today)) {
             boolean inProgress = false;
             for (Journal.WorkoutDraft draft : drafts) {
                 if (draft.date.equals(session.date) && draft.plan.id == session.plan.id) inProgress = true;
@@ -592,8 +594,7 @@ public final class MainActivity extends Activity {
 
     void trainingSaved(LocalDate date) {
         refresh();
-        if (date.isBefore(week.start)) Toast.makeText(this, "训练已保存，可在复盘查看。", Toast.LENGTH_SHORT).show();
-        else editors.showCompleted(week.completed(), week.sessions.size());
+        editors.showCompleted(date, week);
     }
 
     static String kg(double value) {

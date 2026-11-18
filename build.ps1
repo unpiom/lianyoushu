@@ -1,6 +1,7 @@
 param(
     [string]$JavaHome = $env:JAVA_HOME,
-    [string]$AndroidSdk = $env:ANDROID_HOME
+    [string]$AndroidSdk = $env:ANDROID_HOME,
+    [string]$Gradle
 )
 
 $ErrorActionPreference = 'Stop'
@@ -14,6 +15,11 @@ if (!$JavaHome) {
 }
 if (!$AndroidSdk) { $AndroidSdk = Join-Path $build 'sdk' }
 if (!$JavaHome) { throw 'Set JAVA_HOME or pass -JavaHome with a JDK 17+ installation.' }
+if (!$Gradle) {
+    $Gradle = Join-Path $build 'tooling\gradle-8.11.1\bin\gradle.bat'
+    if (!(Test-Path -LiteralPath $Gradle)) { $Gradle = (Get-Command gradle.bat -ErrorAction SilentlyContinue).Source }
+}
+if (!$Gradle) { throw 'Install Gradle 8.11.1 or pass -Gradle with the path to gradle.bat.' }
 $androidJar = Join-Path $AndroidSdk 'platforms\android-35\android.jar'
 if (!(Test-Path -LiteralPath $androidJar)) { throw 'Install the Android 35 platform into the SDK.' }
 $tools = Join-Path $AndroidSdk 'build-tools\35.0.1'
@@ -26,36 +32,26 @@ function Invoke-BuildTool([string]$Program, [string[]]$Arguments) {
 }
 
 $java = Join-Path $JavaHome 'bin\java.exe'
-$javac = Join-Path $JavaHome 'bin\javac.exe'
-$jar = Join-Path $JavaHome 'bin\jar.exe'
 $keytool = Join-Path $JavaHome 'bin\keytool.exe'
-$aapt = Join-Path $tools 'aapt2.exe'
 $zipalign = Join-Path $tools 'zipalign.exe'
-$d8 = Join-Path $tools 'lib\d8.jar'
 $apksigner = Join-Path $tools 'lib\apksigner.jar'
 
+$previousJavaHome = $env:JAVA_HOME
+$previousAndroidHome = $env:ANDROID_HOME
+$previousSdkRoot = $env:ANDROID_SDK_ROOT
 $work = (New-Item -ItemType Directory -Path (Join-Path $build ('apk-' + [Guid]::NewGuid().ToString('N')))).FullName
-$classes = (New-Item -ItemType Directory -Path (Join-Path $work 'classes')).FullName
-$dex = (New-Item -ItemType Directory -Path (Join-Path $work 'dex')).FullName
-$source = Join-Path $project 'app\src\main'
-$resources = Join-Path $work 'resources.zip'
-$unsigned = Join-Path $work 'unsigned.apk'
+$unsigned = Join-Path $build 'gradle-app\outputs\apk\release\app-release-unsigned.apk'
 $aligned = Join-Path $work 'aligned.apk'
 $signed = Join-Path $work 'signed.apk'
-$compiled = Join-Path $work 'classes.jar'
 $target = Join-Path $project '练有数.apk'
 
 try {
-    Invoke-BuildTool $aapt @('compile','--dir',(Join-Path $source 'res'),'-o',$resources)
-    Invoke-BuildTool $aapt @('link','-o',$unsigned,'-I',$androidJar,'--manifest',
-        (Join-Path $source 'AndroidManifest.xml'),$resources)
-    $javaFiles = @(Get-ChildItem -LiteralPath (Join-Path $source 'java') -Recurse -Filter '*.java' -File |
-        Select-Object -ExpandProperty FullName)
-    Invoke-BuildTool $javac (@('--release','8','-Xlint:-options','-encoding','UTF-8','-classpath',$androidJar,'-d',$classes) + $javaFiles)
-    Invoke-BuildTool $jar @('cf',$compiled,'-C',$classes,'.')
-    Invoke-BuildTool $java @('-cp',$d8,'com.android.tools.r8.D8','--release','--min-api','26','--lib',$androidJar,'--output',$dex,$compiled)
-    Invoke-BuildTool $jar @('uf',$unsigned,'-C',$dex,'classes.dex')
-    Invoke-BuildTool $zipalign @('-f','4',$unsigned,$aligned)
+    $env:JAVA_HOME = $JavaHome
+    $env:ANDROID_HOME = $AndroidSdk
+    $env:ANDROID_SDK_ROOT = $AndroidSdk
+    Invoke-BuildTool $Gradle @('--no-daemon','--gradle-user-home',(Join-Path $build 'gradle-user'),
+        '--project-cache-dir',(Join-Path $build 'gradle-cache'),'-p',$project,':app:assembleRelease')
+    Invoke-BuildTool $zipalign @('-f','-P','16','4',$unsigned,$aligned)
 
     $signing = (New-Item -ItemType Directory -Path (Join-Path $build 'signing') -Force).FullName
     $key = Join-Path $signing 'lianji.p12'
@@ -74,10 +70,13 @@ try {
     Invoke-BuildTool $java @('-jar',$apksigner,'sign','--ks',$key,'--ks-key-alias','lianji',
         '--ks-pass',"file:$passwordFile",'--v4-signing-enabled','false','--out',$signed,$aligned)
     Invoke-BuildTool $java @('-jar',$apksigner,'verify','--verbose',$signed)
-    Invoke-BuildTool $zipalign @('-c','4',$signed)
+    Invoke-BuildTool $zipalign @('-c','-P','16','4',$signed)
     Copy-Item -LiteralPath $signed -Destination $target -Force
     Get-Item -LiteralPath $target | Select-Object FullName,Length
 } finally {
+    $env:JAVA_HOME = $previousJavaHome
+    $env:ANDROID_HOME = $previousAndroidHome
+    $env:ANDROID_SDK_ROOT = $previousSdkRoot
     $resolvedWork = (Resolve-Path -LiteralPath $work).Path
     if ($resolvedWork.StartsWith($build + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
         Remove-Item -LiteralPath $resolvedWork -Recurse -Force

@@ -1,5 +1,6 @@
 package com.lianji.fitlog;
 
+import android.app.NotificationManager;
 import android.content.ContentValues;
 import android.content.Context;
 import android.database.Cursor;
@@ -12,13 +13,16 @@ import org.json.JSONObject;
 import java.io.File;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
-import java.util.Map;
-import java.util.TreeMap;
+import java.util.Set;
 
 final class Store extends SQLiteOpenHelper {
+    private final Context context;
+
     Store(Context context) {
-        super(context, new File(context.getNoBackupFilesDir(), "journal.db").getAbsolutePath(), null, 2);
+        super(context, new File(context.getNoBackupFilesDir(), "journal.db").getAbsolutePath(), null, 5);
+        this.context = context.getApplicationContext();
     }
 
     @Override public void onCreate(SQLiteDatabase db) {
@@ -34,18 +38,33 @@ final class Store extends SQLiteOpenHelper {
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {
-        if (oldVersion != 1 || newVersion != 2) throw new IllegalStateException("Missing journal database migration");
-        db.execSQL("ALTER TABLE weights ADD COLUMN locked INTEGER NOT NULL DEFAULT 1");
-        db.execSQL("ALTER TABLE check_ins ADD COLUMN duration_seconds INTEGER");
-        db.execSQL("ALTER TABLE check_ins ADD COLUMN set_logs TEXT NOT NULL DEFAULT '[]'");
-        db.execSQL("ALTER TABLE check_ins ADD COLUMN finished_at INTEGER NOT NULL DEFAULT 0");
-        createActivityTables(db);
+        if (oldVersion < 2) {
+            db.execSQL("ALTER TABLE weights ADD COLUMN locked INTEGER NOT NULL DEFAULT 1");
+            db.execSQL("ALTER TABLE check_ins ADD COLUMN duration_seconds INTEGER");
+            db.execSQL("ALTER TABLE check_ins ADD COLUMN set_logs TEXT NOT NULL DEFAULT '[]'");
+            db.execSQL("ALTER TABLE check_ins ADD COLUMN finished_at INTEGER NOT NULL DEFAULT 0");
+            createActivityTables(db);
+        }
+        if (oldVersion < 5) removeLegacyStepData(db);
+    }
+
+    private void removeLegacyStepData(SQLiteDatabase db) {
+        db.execSQL("DROP TABLE IF EXISTS manual_steps");
+        db.execSQL("DROP TABLE IF EXISTS wechat_steps");
+        db.execSQL("DROP TABLE IF EXISTS device_steps");
+        db.execSQL("DROP TABLE IF EXISTS device_step_checkpoint");
+        // The old settings table only stored the step goal.
+        db.execSQL("DROP TABLE IF EXISTS settings");
+        context.deleteSharedPreferences("device_steps");
+        NotificationManager notifications = context.getSystemService(NotificationManager.class);
+        if (notifications != null) {
+            notifications.deleteNotificationChannel("device_steps");
+            notifications.deleteNotificationChannel("wechat_steps");
+        }
     }
 
     private void createActivityTables(SQLiteDatabase db) {
         db.execSQL("CREATE TABLE waist (day TEXT PRIMARY KEY NOT NULL, cm REAL NOT NULL)");
-        db.execSQL("CREATE TABLE manual_steps (day TEXT PRIMARY KEY NOT NULL, count INTEGER NOT NULL)");
-        db.execSQL("CREATE TABLE settings (name TEXT PRIMARY KEY NOT NULL, number INTEGER NOT NULL)");
         db.execSQL("CREATE TABLE workout_drafts (day TEXT NOT NULL, plan_id INTEGER NOT NULL, "
                 + "name TEXT NOT NULL, days INTEGER NOT NULL, minutes INTEGER NOT NULL, exercises TEXT NOT NULL, "
                 + "started_at INTEGER NOT NULL, rest_seconds INTEGER NOT NULL, rest_until INTEGER NOT NULL, "
@@ -120,47 +139,6 @@ final class Store extends SQLiteOpenHelper {
         getWritableDatabase().delete("waist", "day = ?", new String[]{date.toString()});
     }
 
-    Map<LocalDate, Long> manualSteps(LocalDate start, LocalDate end) {
-        Map<LocalDate, Long> result = new TreeMap<>();
-        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT day, count FROM manual_steps WHERE day BETWEEN ? AND ?",
-                new String[]{start.toString(), end.toString()})) {
-            while (cursor.moveToNext()) result.put(LocalDate.parse(cursor.getString(0)), cursor.getLong(1));
-        }
-        return result;
-    }
-
-    Long manualSteps(LocalDate date) {
-        return manualSteps(date, date).get(date);
-    }
-
-    void saveSteps(LocalDate date, long count) {
-        ContentValues values = new ContentValues();
-        values.put("day", date.toString());
-        values.put("count", count);
-        insertOrReplace("manual_steps", values);
-    }
-
-    void deleteSteps(LocalDate date) {
-        getWritableDatabase().delete("manual_steps", "day = ?", new String[]{date.toString()});
-    }
-
-    Long stepGoal() {
-        try (Cursor cursor = getReadableDatabase().rawQuery("SELECT number FROM settings WHERE name = 'step_goal'", null)) {
-            return cursor.moveToFirst() ? cursor.getLong(0) : null;
-        }
-    }
-
-    void saveStepGoal(long count) {
-        ContentValues values = new ContentValues();
-        values.put("name", "step_goal");
-        values.put("number", count);
-        insertOrReplace("settings", values);
-    }
-
-    void deleteStepGoal() {
-        getWritableDatabase().delete("settings", "name = 'step_goal'", null);
-    }
-
     Double goal() {
         try (Cursor cursor = getReadableDatabase().rawQuery("SELECT kg FROM goal WHERE id = 1", null)) {
             return cursor.moveToFirst() ? cursor.getDouble(0) : null;
@@ -194,6 +172,27 @@ final class Store extends SQLiteOpenHelper {
             db.insertOrThrow("plans", null, values);
         } else {
             db.update("plans", values, "id = ?", new String[]{Long.toString(plan.id)});
+        }
+    }
+
+    int importPlans(List<Journal.Plan> imported) {
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            Set<ContentValues> existing = new HashSet<>();
+            for (Journal.Plan plan : plans()) existing.add(planValues(plan));
+            int added = 0;
+            for (Journal.Plan plan : imported) {
+                ContentValues values = planValues(plan);
+                if (existing.add(values)) {
+                    db.insertOrThrow("plans", null, values);
+                    added++;
+                }
+            }
+            db.setTransactionSuccessful();
+            return added;
+        } finally {
+            db.endTransaction();
         }
     }
 
@@ -243,11 +242,6 @@ final class Store extends SQLiteOpenHelper {
         values.put("set_logs", encodeSets(sets));
         values.put("finished_at", System.currentTimeMillis());
         db.insertOrThrow("check_ins", null, values);
-    }
-
-    void undo(Journal.Session session) {
-        getWritableDatabase().delete("check_ins", "day = ? AND plan_id = ?",
-                new String[]{session.date.toString(), Long.toString(session.plan.id)});
     }
 
     Journal.WorkoutDraft draft(LocalDate date, long planId) {
@@ -411,18 +405,19 @@ final class Store extends SQLiteOpenHelper {
         values.put("name", plan.name);
         values.put("days", plan.days);
         values.put("minutes", plan.minutes);
-        JSONArray array = new JSONArray();
         try {
-            for (Journal.Exercise exercise : plan.exercises) {
-                JSONObject entry = new JSONObject();
-                entry.put("name", exercise.name);
-                entry.put("sets", exercise.sets);
-                array.put(entry);
-            }
+            values.put("exercises", encodeExercises(plan.exercises).toString());
         } catch (JSONException error) {
             throw new IllegalStateException("Invalid exercise", error);
         }
-        values.put("exercises", array.toString());
         return values;
+    }
+
+    static JSONArray encodeExercises(List<Journal.Exercise> exercises) throws JSONException {
+        JSONArray array = new JSONArray();
+        for (Journal.Exercise exercise : exercises) {
+            array.put(new JSONObject().put("name", exercise.name).put("sets", exercise.sets));
+        }
+        return array;
     }
 }

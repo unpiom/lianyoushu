@@ -135,45 +135,13 @@ final class Editors {
         panel.show();
     }
 
-    void editSteps(LocalDate date) {
-        Long count = store.manualSteps(date);
-        Panel panel = new Panel("手动记步");
-        ui.add(panel.form, ui.text(MainActivity.FULL_DATE.format(date), 14, MUTED, false), 0);
-        EditText steps = input(panel, "例如 6500", count == null ? "" : count.toString(), INTEGER, 6);
-        field(panel.form, "当天步数", steps, 10);
-        if (count != null) ui.add(panel.form, ui.button("移除手动记录", WHITE, RED, LINE, () -> confirm("移除手动步数",
-                "移除后会显示安卓健康中已有的当天步数。", "移除", RED,
-                () -> save(panel, () -> store.deleteSteps(date), "手动步数已移除"))), 11);
-        panel.actions("保存", GREEN, () -> {
-            int value = integer(steps, 999999);
-            if (value < 0) panel.error("请输入 0 至 999999 之间的整数。");
-            else if (date.isAfter(LocalDate.now())) panel.error("请选择今天或之前的日期。");
-            else save(panel, () -> store.saveSteps(date, value), "步数已记录");
-        });
-        panel.show();
-    }
-
-    void editStepGoal() {
-        Long current = store.stepGoal();
-        Panel panel = new Panel("每日步数目标");
-        EditText target = input(panel, "例如 7000", current == null ? "" : current.toString(), INTEGER, 6);
-        field(panel.form, "目标步数", target, 0);
-        if (current != null) ui.add(panel.form, ui.button("清除步数目标", WHITE, RED, LINE,
-                () -> save(panel, store::deleteStepGoal, "步数目标已清除")), 11);
-        panel.actions("保存", GREEN, () -> {
-            int value = integer(target, 999999);
-            if (value < 1) panel.error("请输入 1 至 999999 之间的整数。");
-            else save(panel, () -> store.saveStepGoal(value), "步数目标已保存");
-        });
-        panel.show();
-    }
-
     void quickCheckIn(Journal.Session session) {
-        Panel panel = new Panel(session.date.equals(LocalDate.now()) ? "训练打卡" : "补打卡");
+        Panel panel = new Panel(session.date.equals(LocalDate.now()) ? "确认训练打卡" : "确认补打卡");
         ui.add(panel.form, ui.text(session.plan.name + " · " + MainActivity.FULL_DATE.format(session.date), 14, MUTED, false), 0);
         EditText minutes = input(panel, "可选填", "", INTEGER, 4);
         field(panel.form, "实际训练时长（分钟）", minutes, 11);
-        panel.actions("确认打卡", GREEN, () -> {
+        ui.add(panel.form, ui.text(activity.getString(R.string.check_in_lock_hint), 14, MUTED, false), 10);
+        panel.actions(activity.getString(R.string.check_in_undo), activity.getString(R.string.check_in_confirm), GREEN, () -> {
             boolean hasMinutes = !minutes.getText().toString().trim().isEmpty();
             int duration = integer(minutes, 1440);
             if (hasMinutes && duration < 1) {
@@ -320,24 +288,25 @@ final class Editors {
         button.setTextColor(active ? WHITE : MUTED);
     }
 
-    void undo(Journal.Session session) {
-        confirm("撤销打卡", "将撤销「" + session.plan.name + "」在 " + MainActivity.FULL_DATE.format(session.date)
-                + "的打卡。" + (session.sets.isEmpty() ? "" : "本次逐组记录也会删除。"), "撤销", GREEN,
-                () -> save(null, () -> store.undo(session), "已撤销打卡"));
-    }
-
-    void showCompleted(int count, int total) {
-        Panel panel = new Panel("打卡完成");
+    void showCompleted(LocalDate date, Journal.Week week) {
+        Panel panel = new Panel("恭喜打卡成功！");
         LinearLayout summary = ui.row();
         FrameLayout badge = new FrameLayout(activity);
         badge.setBackground(ui.shape(LIME, 0, 15));
         badge.addView(ui.icon(Icon.CHECK, FOREST, 26), new FrameLayout.LayoutParams(ui.dp(26), ui.dp(26), Gravity.CENTER));
         summary.addView(badge, new LinearLayout.LayoutParams(ui.dp(50), ui.dp(50)));
-        String encouragement = total > 0 && count == total ? "本周训练全部完成！" : "又完成了一次训练！";
+        boolean currentWeek = !date.isBefore(week.start);
+        int count = week.completed();
+        int total = week.sessions.size();
+        String encouragement = currentWeek && total > 0 && count == total ? "本周训练全部完成！" : "又完成了一次训练！";
         ui.weighted(summary, ui.heading(encouragement, 17), 1, 13);
         ui.add(panel.form, summary, 4);
-        ui.add(panel.form, ui.text("本周完成 " + count + " / " + total + " 次", 15, GREEN, true), 12);
-        ui.progress(panel.form, count, total, 7);
+        if (currentWeek) {
+            ui.add(panel.form, ui.text("本周完成 " + count + " / " + total + " 次", 15, GREEN, true), 12);
+            ui.progress(panel.form, count, total, 7);
+        } else {
+            ui.add(panel.form, ui.text(MainActivity.FULL_DATE.format(date) + "的训练已记录，可在复盘查看。", 14, MUTED, false), 12);
+        }
         ui.add(panel.actions, ui.primary("完成", panel.dialog::dismiss), 0);
         panel.show();
     }
@@ -353,7 +322,7 @@ final class Editors {
 
     private boolean save(Panel panel, Runnable write, String status) {
         if (!activity.write(write)) return false;
-        if (panel != null) panel.dialog.dismiss();
+        panel.dialog.dismiss();
         activity.refresh();
         Toast.makeText(activity, status, Toast.LENGTH_SHORT).show();
         return true;
@@ -445,8 +414,12 @@ final class Editors {
         }
 
         void actions(String label, int color, Runnable onSave) {
+            actions("取消", label, color, onSave);
+        }
+
+        void actions(String cancelLabel, String label, int color, Runnable onSave) {
             LinearLayout bar = ui.row();
-            ui.weighted(bar, ui.secondary("取消", dialog::dismiss), 1, 0);
+            ui.weighted(bar, ui.secondary(cancelLabel, dialog::dismiss), 1, 0);
             ui.weighted(bar, ui.button(label, color, WHITE, 0, onSave), 1.35f, 8);
             ui.add(actions, bar, 0);
         }
