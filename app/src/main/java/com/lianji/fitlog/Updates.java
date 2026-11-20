@@ -116,17 +116,19 @@ final class Updates {
     }
 
     void check() {
-        run("正在检查更新…", "检查更新失败，请检查网络后重试。", Updates::latest, release -> {
-            int comparison = compareVersions(release.version, currentVersion());
+        String current = currentVersion();
+        run("正在检查更新…", "检查更新失败，请检查网络后重试。", () -> latest(current), latest -> {
             AlertDialog.Builder dialog = new AlertDialog.Builder(activity).setTitle("应用更新");
-            if (comparison > 0) {
+            Release release = latest.update;
+            if (release != null) {
                 String size = String.format(Locale.SIMPLIFIED_CHINESE, "%.1f MB", release.size / 1048576.0);
-                dialog.setMessage("发现新版本 " + release.version + "（" + size + "）。\n当前版本 " + currentVersion()
+                dialog.setMessage("发现新版本 " + release.version + "（" + size + "）。\n当前版本 " + current
                                 + "。覆盖安装会保留应用数据。")
                         .setNegativeButton("稍后", null).setPositiveButton("下载并安装", (view, which) -> beginInstall(release));
+            } else if (current.equals(latest.version)) {
+                dialog.setMessage("当前已是最新发布版。").setPositiveButton("完成", null);
             } else {
-                String status = comparison == 0 ? "当前已是最新发布版。" : "当前版本高于 GitHub 已发布版本。";
-                dialog.setMessage(status + "\n当前版本 " + currentVersion() + " · 已发布 " + release.version)
+                dialog.setMessage("当前版本高于 GitHub 已发布版本。\n当前版本 " + current + " · 已发布 " + latest.version)
                         .setPositiveButton("完成", null);
             }
             dialog.show();
@@ -197,7 +199,7 @@ final class Updates {
         }, "app-update").start();
     }
 
-    private static Release latest() throws Exception {
+    private static LatestRelease latest(String currentVersion) throws Exception {
         HttpsURLConnection connection = connect(new URL(API), true);
         JSONObject json;
         try (InputStream stream = connection.getInputStream(); ByteArrayOutputStream buffer = new ByteArrayOutputStream()) {
@@ -211,13 +213,18 @@ final class Updates {
         } finally {
             connection.disconnect();
         }
-        return parseRelease(json);
+        return parseLatestRelease(json, currentVersion);
     }
 
-    static Release parseRelease(JSONObject json) throws Exception {
+    static LatestRelease parseLatestRelease(JSONObject json, String currentVersion) throws Exception {
         String tag = json.getString("tag_name");
         if (!tag.startsWith("v") || !VERSION.matcher(tag.substring(1)).matches()) throw new IOException("Invalid release tag");
         String version = tag.substring(1);
+        Release update = compareVersions(version, currentVersion) > 0 ? parseReleaseApk(json, version) : null;
+        return new LatestRelease(version, update);
+    }
+
+    private static Release parseReleaseApk(JSONObject json, String version) throws Exception {
         JSONArray assets = json.getJSONArray("assets");
         for (int i = 0; i < assets.length(); i++) {
             JSONObject asset = assets.getJSONObject(i);
@@ -348,6 +355,16 @@ final class Updates {
 
     private static long versionCode(PackageInfo info) {
         return Build.VERSION.SDK_INT >= 28 ? info.getLongVersionCode() : info.versionCode;
+    }
+
+    static final class LatestRelease {
+        final String version;
+        final Release update;
+
+        LatestRelease(String version, Release update) {
+            this.version = version;
+            this.update = update;
+        }
     }
 
     static final class Release {

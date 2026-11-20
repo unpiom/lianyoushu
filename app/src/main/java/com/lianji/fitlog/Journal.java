@@ -153,19 +153,7 @@ final class Journal {
         Week(LocalDate today, List<Plan> plans, List<Session> checkIns) {
             start = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
             for (int offset = 0; offset < 7; offset++) {
-                LocalDate date = start.plusDays(offset);
-                Map<Long, Session> day = new TreeMap<>();
-                for (Plan plan : plans) {
-                    if (plan.repeatsOn(date)) {
-                        day.put(plan.id, new Session(date, plan, false));
-                    }
-                }
-                for (Session checkIn : checkIns) {
-                    if (checkIn.date.equals(date)) {
-                        day.put(checkIn.plan.id, checkIn);
-                    }
-                }
-                sessions.addAll(day.values());
+                sessions.addAll(sessionsOn(start.plusDays(offset), plans, checkIns));
             }
         }
 
@@ -184,6 +172,21 @@ final class Journal {
             }
             return count;
         }
+    }
+
+    static List<Session> sessionsOn(LocalDate date, List<Plan> plans, List<Session> checkIns) {
+        Map<Long, Session> sessions = new TreeMap<>();
+        for (Plan plan : plans) {
+            if (plan.repeatsOn(date)) {
+                sessions.put(plan.id, new Session(date, plan, false));
+            }
+        }
+        for (Session checkIn : checkIns) {
+            if (checkIn.date.equals(date)) {
+                sessions.put(checkIn.plan.id, checkIn);
+            }
+        }
+        return new ArrayList<>(sessions.values());
     }
 
     static int dayBit(DayOfWeek weekday) {

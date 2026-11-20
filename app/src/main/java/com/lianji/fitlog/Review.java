@@ -17,10 +17,9 @@ import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
-import java.util.HashSet;
+import java.util.Collections;
 import java.util.List;
 import java.util.Locale;
-import java.util.Set;
 
 import static com.lianji.fitlog.Ui.*;
 
@@ -28,6 +27,7 @@ final class Review {
     private static final DateTimeFormatter MONTH = DateTimeFormatter.ofPattern("yyyy年M月", Locale.SIMPLIFIED_CHINESE);
     private static final DateTimeFormatter DAY = DateTimeFormatter.ofPattern("M月d日", Locale.SIMPLIFIED_CHINESE);
     private static final DateTimeFormatter RANGE = DateTimeFormatter.ofPattern("M/d", Locale.SIMPLIFIED_CHINESE);
+    private static final int PARTIAL_GREEN = 0xffc7e6cc;
     private final MainActivity activity;
     private final Ui ui;
     private final Store store;
@@ -44,7 +44,7 @@ final class Review {
         if (selected != null) state.putString("reviewDate", selected.toString());
     }
 
-    void show(LinearLayout page, LocalDate today, List<Journal.Weight> weights) {
+    void show(LinearLayout page, LocalDate today, List<Journal.Weight> weights, List<Journal.Plan> plans) {
         if (selected == null || selected.isAfter(today)) selected = today;
         LocalDate monday = selected.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         LocalDate sunday = monday.plusDays(6);
@@ -52,7 +52,7 @@ final class Review {
         ui.add(page, weekCard(today, monday, sunday, checkIns, weights), 0);
         YearMonth month = YearMonth.from(selected);
         List<Journal.Session> history = store.checkIns(month.atDay(1), month.atEndOfMonth());
-        ui.add(page, calendar(today, month, history), 13);
+        ui.add(page, calendar(today, month, plans, history), 13);
 
         ui.add(page, ui.heading(DAY.format(selected) + "训练", 18), 17);
         List<Journal.Session> day = new ArrayList<>();
@@ -122,7 +122,7 @@ final class Review {
         return Double.isNaN(kg) ? "—" : MainActivity.kg(kg) + " kg";
     }
 
-    private View calendar(LocalDate today, YearMonth month, List<Journal.Session> history) {
+    private View calendar(LocalDate today, YearMonth month, List<Journal.Plan> plans, List<Journal.Session> history) {
         LinearLayout card = ui.card();
         LinearLayout toolbar = ui.row();
         Button previous = ui.secondary("‹", () -> changeMonth(month.minusMonths(1), today));
@@ -146,8 +146,6 @@ final class Review {
             ui.weighted(titles, cell, 1, 0);
         }
         ui.add(card, titles, 8);
-        Set<LocalDate> logged = new HashSet<>();
-        for (Journal.Session session : history) logged.add(session.date);
         int offset = month.atDay(1).getDayOfWeek().getValue() - 1;
         for (int rowIndex = 0; rowIndex * 7 < offset + month.lengthOfMonth(); rowIndex++) {
             LinearLayout row = ui.row();
@@ -157,7 +155,9 @@ final class Review {
                 if (day < 1 || day > month.lengthOfMonth()) cell = new Space(activity);
                 else {
                     LocalDate date = month.atDay(day);
-                    cell = dayCell(date, today, logged.contains(date));
+                    List<Journal.Session> sessions = date.isAfter(today) ? Collections.emptyList()
+                            : Journal.sessionsOn(date, plans, history);
+                    cell = dayCell(date, today, sessions);
                 }
                 ui.weighted(row, cell, 1, column == 0 ? 0 : 2);
             }
@@ -166,15 +166,35 @@ final class Review {
         return card;
     }
 
-    private View dayCell(LocalDate date, LocalDate today, boolean checked) {
-        LinearLayout cell = ui.column();
+    private View dayCell(LocalDate date, LocalDate today, List<Journal.Session> sessions) {
         boolean active = date.equals(selected);
         boolean future = date.isAfter(today);
+        int fill = date.equals(today) ? BACKGROUND : WHITE;
+        int color = future ? 0xff87978d : TEXT;
+        String status = future ? "日期尚未到来" : "无训练安排";
+        if (!sessions.isEmpty()) {
+            int completed = 0;
+            for (Journal.Session session : sessions) if (session.done) completed++;
+            if (completed == sessions.size()) {
+                fill = GREEN;
+                color = WHITE;
+                status = "训练计划全部完成";
+            } else if (completed == 0) {
+                fill = RED;
+                color = WHITE;
+                status = "训练计划均未完成";
+            } else {
+                fill = PARTIAL_GREEN;
+                status = "部分训练计划已完成";
+            }
+        }
+
+        LinearLayout cell = ui.column();
         cell.setGravity(Gravity.CENTER);
         cell.setMinimumHeight(ui.dp(44));
-        cell.setBackground(ui.ripple(active ? FOREST : date.equals(today) ? TINT : WHITE, 0, 10));
+        cell.setBackground(ui.ripple(fill, active ? FOREST : 0, 10));
         cell.setSelected(active);
-        cell.setContentDescription(MainActivity.FULL_DATE.format(date) + (checked ? "，有训练记录" : ""));
+        cell.setContentDescription(MainActivity.FULL_DATE.format(date) + "，" + status);
         if (!future) {
             cell.setFocusable(true);
             cell.setOnClickListener(view -> {
@@ -184,14 +204,14 @@ final class Review {
                 }
             });
         }
-        TextView number = ui.text(Integer.toString(date.getDayOfMonth()), 13, active ? WHITE : future ? 0xff87978d : TEXT, true);
+        TextView number = ui.text(Integer.toString(date.getDayOfMonth()), 13, color, true);
         number.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         cell.addView(number, new LinearLayout.LayoutParams(WRAP, WRAP));
-        View dot = new View(activity);
-        dot.setBackground(ui.shape(checked ? active ? LIME : GREEN : 0, 0, 4));
+        View selectionDot = new View(activity);
+        if (active) selectionDot.setBackground(ui.shape(color, 0, 4));
         LinearLayout.LayoutParams spot = new LinearLayout.LayoutParams(ui.dp(5), ui.dp(5));
         spot.topMargin = ui.dp(1);
-        cell.addView(dot, spot);
+        cell.addView(selectionDot, spot);
         return cell;
     }
 

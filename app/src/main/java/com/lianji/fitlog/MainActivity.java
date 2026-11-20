@@ -6,7 +6,9 @@ import android.content.Intent;
 import android.content.res.Configuration;
 import android.os.Bundle;
 import android.os.LocaleList;
+import android.text.TextUtils;
 import android.util.Log;
+import android.util.TypedValue;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
@@ -175,7 +177,7 @@ public final class MainActivity extends Activity {
         if (tab == TODAY) showToday(page);
         else if (tab == WEIGHT) showWeight(page);
         else if (tab == TRAINING) showTraining(page);
-        else review.show(page, today, weights);
+        else review.show(page, today, weights, plans);
 
         setContentView(root);
         root.requestApplyInsets();
@@ -301,8 +303,17 @@ public final class MainActivity extends Activity {
         version.addView(ui.secondary("检查更新", updates::check));
         ui.add(page, version, 13);
         LinearLayout project = ui.row();
-        project.addView(ui.secondary("GitHub 项目主页", updates::openProject));
-        ui.weighted(project, ui.text("觉得好用，欢迎给项目点个 Star。", 13, MUTED, false), 1, 8);
+        Button projectLink = ui.secondary("GitHub 项目主页", updates::openProject);
+        ui.padding(projectLink, 8, 8, 8, 8);
+        project.addView(projectLink);
+        TextView starHint = ui.text("觉得好用，欢迎给项目点个 Star。", 13, MUTED, false);
+        starHint.setMaxLines(1);
+        starHint.setEllipsize(TextUtils.TruncateAt.END);
+        starHint.setGravity(Gravity.CENTER_VERTICAL);
+        starHint.setAutoSizeTextTypeUniformWithConfiguration(8, 13, 1, TypedValue.COMPLEX_UNIT_SP);
+        LinearLayout.LayoutParams hintParams = new LinearLayout.LayoutParams(0, ui.dp(48), 1);
+        hintParams.leftMargin = ui.dp(6);
+        project.addView(starHint, hintParams);
         ui.add(page, project, 8);
         TextView privacy = ui.text("卸载会清除应用中的记录", 12, MUTED, false);
         privacy.setGravity(Gravity.CENTER);

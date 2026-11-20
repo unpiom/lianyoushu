@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">练有数</string>
     <string name="update_announcement_title">练有数 %1$s 更新公告</string>
-    <string name="update_notes">移除步数功能及相关权限。升级后首次打开时会清除本应用保存的步数和目标。\n\n训练打卡确认前可撤销，确认后锁定并显示成功提示。\n\nGitHub 项目主页入口移到首页底部左侧。首页支持检查更新，训练页支持导入和导出每周计划。</string>
+    <string name="update_notes">首页底部的 GitHub 项目主页与 Star 提示并排，右侧文案单行显示。\n\n检查更新时，若已是最新发布版，显示「当前已是最新发布版。」\n\n复盘日历按训练计划的确认打卡进度着色。全部完成为绿色，部分完成为淡绿色，完全未完成为红色。</string>
     <string name="check_in_undo">撤销打卡</string>
     <string name="check_in_confirm">确认打卡</string>
     <string name="check_in_lock_hint">确认后无法撤销。</string>
