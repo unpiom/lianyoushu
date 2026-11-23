@@ -42,6 +42,8 @@ public final class MainActivity extends Activity {
     private static final int TRAINING = 2;
     private static final int REVIEW = 3;
     private static final int WORKOUT_REQUEST = 42;
+    private static final int DEFAULT_FORECAST_DAYS = 28;
+    private static final String FORECAST_DEADLINE = "forecast_deadline";
 
     private Ui ui;
     private Store store;
@@ -74,9 +76,9 @@ public final class MainActivity extends Activity {
         ui = new Ui(this);
         store = new Store(this);
         editors = new Editors(this, ui, store);
-        review = new Review(this, ui, store, editors, state);
-        planFiles = new PlanFiles(this);
         updates = new Updates(this, state);
+        review = new Review(this, ui, store, editors, updates.firstInstallDate(), state);
+        planFiles = new PlanFiles(this);
         int previousScroll = 0;
         if (state != null) {
             tab = state.getInt("tab", TODAY);
@@ -302,11 +304,10 @@ public final class MainActivity extends Activity {
         ui.add(hero, actions, 12);
         ui.add(page, hero, 0);
 
-        Journal.Forecast forecast = goal == null ? null : Journal.forecast(weights, today, goal);
+        Journal.Forecast forecast = goal == null ? null
+                : Journal.forecast(weights, today, goal, preferredForecastDeadline(today));
         ui.add(page, forecastCard(forecast), 13);
-        if (forecast != null && forecast.status == Journal.ForecastStatus.ESTIMATED) {
-            ui.add(page, probabilityCard(forecast), 10);
-        }
+        ui.add(page, probabilityCard(forecast), 10);
         LinearLayout version = ui.row();
         ui.weighted(version, ui.text("版本 " + updates.currentVersion(), 13, MUTED, false), 1, 0);
         version.addView(ui.secondary("检查更新", updates::check));
@@ -348,53 +349,54 @@ public final class MainActivity extends Activity {
         LinearLayout card = ui.card();
         LinearLayout bar = ui.row();
         bar.addView(ui.icon(Icon.TARGET, GREEN, 20));
-        ui.weighted(bar, ui.heading("达标预估", 18), 1, 8);
-        if (forecast == null) bar.addView(ui.secondary("设置目标", editors::editGoal));
+        ui.weighted(bar, ui.heading(getString(R.string.forecast_title), 18), 1, 8);
+        if (forecast == null) bar.addView(ui.secondary(getString(R.string.forecast_set_goal), editors::editGoal));
         ui.add(card, bar, 0);
         if (forecast == null) {
-            ui.add(card, ui.text("设置目标体重后，可根据近期走势查看预计日期。", 14, MUTED, false), 8);
+            ui.add(card, ui.text(getString(R.string.forecast_setup_hint), 14, MUTED, false), 8);
             return card;
         }
 
         LinearLayout target = ui.row();
-        ui.weighted(target, ui.text("目标体重", 14, MUTED, false), 1, 0);
+        ui.weighted(target, ui.text(getString(R.string.forecast_goal_weight), 14, MUTED, false), 1, 0);
         TextView goalValue = ui.pill(kg(goal) + " kg", TINT, GREEN);
-        goalValue.setContentDescription("目标体重 " + kg(goal) + " 公斤");
-        ui.editNumber(goalValue, "编辑目标体重", editors::editGoal);
+        goalValue.setContentDescription(getString(R.string.forecast_goal_weight_a11y, kg(goal)));
+        ui.editNumber(goalValue, getString(R.string.forecast_edit_goal), editors::editGoal);
         target.addView(goalValue);
         ui.add(card, target, 6);
-        String result;
-        String details;
-        switch (forecast.status) {
-            case WAITING:
-                result = "积累体重记录中";
-                details = "已记录 " + forecast.records + " 次，跨度 " + forecast.span + " 天。记录满 4 次且跨度满 7 天后开始预估。";
-                break;
-            case REACHED:
-                result = "已达标";
-                details = FULL_DATE.format(forecast.date) + "的记录达到目标体重。";
-                break;
-            case NO_DECLINE:
-                result = "近期体重暂未下降";
-                details = "继续记录，预估会随体重走势更新。";
-                break;
-            case NEEDS_UPDATE:
-                result = "需要近期记录";
-                details = "补记最近的体重后可重新估算。";
-                break;
-            case OUT_OF_RANGE:
-                result = "近期下降幅度较小";
-                details = "继续记录，预估会随体重走势更新。";
-                break;
-            case ESTIMATED:
-            default:
-                result = FULL_DATE.format(forecast.date);
-                details = "近期趋势 " + String.format(Locale.US, "%+.2f", forecast.kgPerWeek) + " kg/周 · 随新记录更新";
-                break;
+        boolean estimated = forecast.status == Journal.ForecastStatus.ESTIMATED;
+        boolean reached = forecast.status == Journal.ForecastStatus.REACHED;
+        if (estimated || reached) {
+            boolean limited = forecast.date == null;
+            LocalDate date = limited ? today.plusDays(forecast.maxDays) : forecast.date;
+            int label = reached ? R.string.forecast_recorded_date
+                    : limited ? R.string.forecast_latest_date : R.string.forecast_estimated_date;
+            ui.add(card, ui.text(getString(label), 13, MUTED, false), 10);
+            ui.add(card, ui.text(FULL_DATE.format(date), 22, GREEN, true), 3);
+            if (estimated) {
+                String detail = getString(limited ? R.string.forecast_below_half : R.string.forecast_first_half);
+                String trend = getString(R.string.forecast_weight_trend, forecast.kgPerWeek);
+                ui.add(card, ui.text(detail  + trend, 13, MUTED, false), 5);
+            }
         }
-        ui.add(card, ui.text(result, 22, GREEN, true), 6);
-        ui.add(card, ui.text(details, 14, MUTED, false), 5);
         return card;
+    }
+
+    private LocalDate preferredForecastDeadline(LocalDate asOf) {
+        LocalDate defaultDate = asOf.plusDays(DEFAULT_FORECAST_DAYS);
+        long saved = getPreferences(MODE_PRIVATE).getLong(FORECAST_DEADLINE, defaultDate.toEpochDay());
+        long days = saved - asOf.toEpochDay();
+        return days >= 0 && days <= Journal.MAX_FORECAST_DAYS ? LocalDate.ofEpochDay(saved) : defaultDate;
+    }
+
+    private void pickForecastDeadline(Journal.Forecast displayed) {
+        LocalDate now = LocalDate.now();
+        Journal.Forecast forecast = now.equals(today) ? displayed
+                : Journal.forecast(weights, now, goal, preferredForecastDeadline(now));
+        editors.pickDate(forecast.deadline, now, now.plusDays(forecast.maxDays), deadline -> {
+            getPreferences(MODE_PRIVATE).edit().putLong(FORECAST_DEADLINE, deadline.toEpochDay()).apply();
+            refresh();
+        });
     }
 
     private View probabilityCard(Journal.Forecast forecast) {
@@ -402,14 +404,21 @@ public final class MainActivity extends Activity {
         card.setBackground(ui.shape(0xfff1f7f0, 0xffdce9df, 20));
         ui.padding(card, 16, 12, 13, 12);
         LinearLayout detail = ui.column();
-        ui.add(detail, ui.heading("达标概率", 18), 0);
-        ui.add(detail, ui.text("截至 " + FULL_DATE.format(forecast.date), 13, GREEN, true), 5);
-        boolean available = !Double.isNaN(forecast.probability);
-        ui.add(detail, ui.text(available ? "按近期体重走势估算" : "暂无法估计", 12, MUTED, false), 5);
+        ui.add(detail, ui.heading(getString(R.string.forecast_probability_title), 18), 0);
+        if (forecast != null) {
+            Button selectDate = ui.secondary(getString(R.string.forecast_deadline_button, HEADER_DATE.format(forecast.deadline)),
+                    () -> pickForecastDeadline(forecast));
+            selectDate.setContentDescription(getString(R.string.forecast_deadline_a11y, FULL_DATE.format(forecast.deadline)));
+            ui.add(detail, selectDate, 5);
+            if (forecast.status == Journal.ForecastStatus.ESTIMATED) {
+                String range = getString(R.string.forecast_range, Journal.FORECAST_WINDOW_DAYS, forecast.maxDays);
+                ui.add(detail, ui.text(range, 12, MUTED, false), 5);
+            }
+        }
         ui.weighted(card, detail, 1, 0);
         LinearLayout.LayoutParams gaugeSize = new LinearLayout.LayoutParams(ui.dp(102), ui.dp(102));
         gaugeSize.leftMargin = ui.dp(8);
-        card.addView(new ProbabilityGauge(this, forecast.probability), gaugeSize);
+        card.addView(new ProbabilityGauge(this, forecast), gaugeSize);
         return card;
     }
 

@@ -11,6 +11,8 @@ import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
@@ -35,6 +37,13 @@ final class Store extends SQLiteOpenHelper {
                 + "finished_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, plan_id))");
         db.execSQL("CREATE TABLE goal (id INTEGER PRIMARY KEY CHECK (id = 1), kg REAL NOT NULL)");
         createActivityTables(db);
+        try (InputStream stream = context.getAssets().open("example-plan.json")) {
+            for (Journal.Plan plan : PlanFiles.decode(stream)) {
+                db.insertOrThrow("plans", null, planValues(plan));
+            }
+        } catch (IOException | JSONException error) {
+            throw new IllegalStateException("Unable to load the bundled training plan", error);
+        }
     }
 
     @Override public void onUpgrade(SQLiteDatabase db, int oldVersion, int newVersion) {

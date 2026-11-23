@@ -1,0 +1,86 @@
+{
+  "format": "com.lianji.fitlog.plans",
+  "version": 1,
+  "plans": [
+    {
+      "name": "胸 三头",
+      "days": 1,
+      "minutes": 70,
+      "exercises": [
+        {
+          "name": "史密斯上斜推 12",
+          "sets": 3
+        },
+        {
+          "name": "对握器械推胸 12",
+          "sets": 3
+        },
+        {
+          "name": "器械夹胸 12",
+          "sets": 3
+        },
+        {
+          "name": "绳索下压 12",
+          "sets": 2
+        }
+      ]
+    },
+    {
+      "name": "背 二头",
+      "days": 4,
+      "minutes": 70,
+      "exercises": [
+        {
+          "name": "对握高位下拉 12",
+          "sets": 4
+        },
+        {
+          "name": "坐姿划船 12",
+          "sets": 4
+        },
+        {
+          "name": "哑铃弯举 8",
+          "sets": 4
+        }
+      ]
+    },
+    {
+      "name": "肩 腹",
+      "days": 16,
+      "minutes": 70,
+      "exercises": [
+        {
+          "name": "史密斯杠铃推举 12",
+          "sets": 3
+        },
+        {
+          "name": "哑铃侧平举 12",
+          "sets": 3
+        },
+        {
+          "name": "蝴蝶机反拉 12",
+          "sets": 3
+        },
+        {
+          "name": "仰卧卷腹 20",
+          "sets": 2
+        },
+        {
+          "name": "仰卧抬腿 20",
+          "sets": 2
+        }
+      ]
+    },
+    {
+      "name": "法特莱克减脂跑",
+      "days": 127,
+      "minutes": 30,
+      "exercises": [
+        {
+          "name": "法特莱克",
+          "sets": 1
+        }
+      ]
+    }
+  ]
+}

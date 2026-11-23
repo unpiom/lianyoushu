@@ -1,7 +1,9 @@
 ﻿param(
     [string]$JavaHome = $env:JAVA_HOME,
     [string]$AndroidSdk = $env:ANDROID_HOME,
-    [string]$Gradle
+    [string]$Gradle,
+    [switch]$Offline,
+    [string]$OutputApk
 )
 
 $ErrorActionPreference = 'Stop'
@@ -43,15 +45,27 @@ $work = (New-Item -ItemType Directory -Path (Join-Path $build ('apk-' + [Guid]::
 $unsigned = Join-Path $build 'gradle-app\outputs\apk\release\app-release-unsigned.apk'
 $aligned = Join-Path $work 'aligned.apk'
 $signed = Join-Path $work 'signed.apk'
-$target = Join-Path $project '练有数.apk'
+$target = if ($OutputApk) {
+    $ExecutionContext.SessionState.Path.GetUnresolvedProviderPathFromPSPath($OutputApk)
+} else {
+    Join-Path $project '练有数.apk'
+}
 
 try {
     $env:JAVA_HOME = $JavaHome
     $env:ANDROID_HOME = $AndroidSdk
     $env:ANDROID_SDK_ROOT = $AndroidSdk
-    Invoke-BuildTool $Gradle @('--no-daemon','--gradle-user-home',(Join-Path $build 'gradle-user'),
+    $gradleArguments = @('--no-daemon','--gradle-user-home',(Join-Path $build 'gradle-user'),
         '--project-cache-dir',(Join-Path $build 'gradle-cache'),'-p',$project,':app:assembleRelease')
-    Invoke-BuildTool $zipalign @('-f','-P','16','4',$unsigned,$aligned)
+    if ($Offline) { $gradleArguments += '--offline' }
+    Invoke-BuildTool $Gradle $gradleArguments
+
+    $signingInput = $unsigned
+    & $zipalign '-c' '-P' '16' '4' $unsigned
+    if ($LASTEXITCODE -ne 0) {
+        Invoke-BuildTool $zipalign @('-f','-P','16','4',$unsigned,$aligned)
+        $signingInput = $aligned
+    }
 
     $signing = (New-Item -ItemType Directory -Path (Join-Path $build 'signing') -Force).FullName
     $key = Join-Path $signing 'lianji.p12'
@@ -74,7 +88,7 @@ try {
     }
     if (!(Test-Path -LiteralPath $passwordFile)) { throw 'The signing keystore requires its original password.txt.' }
     Invoke-BuildTool $java @('-jar',$apksigner,'sign','--ks',$key,'--ks-key-alias','lianji',
-        '--ks-pass',"file:$passwordFile",'--v4-signing-enabled','false','--out',$signed,$aligned)
+        '--ks-pass',"file:$passwordFile",'--v4-signing-enabled','false','--out',$signed,$signingInput)
     Invoke-BuildTool $java @('-jar',$apksigner,'verify','--verbose',$signed)
     Invoke-BuildTool $zipalign @('-c','-P','16','4',$signed)
     Copy-Item -LiteralPath $signed -Destination $target -Force

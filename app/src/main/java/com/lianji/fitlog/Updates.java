@@ -35,6 +35,9 @@ import java.io.OutputStream;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneId;
 import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.Callable;
@@ -75,6 +78,12 @@ final class Updates {
 
     String currentVersion() {
         return installed.versionName;
+    }
+
+    LocalDate firstInstallDate() {
+        long installedAt = installed.firstInstallTime;
+        return installedAt > 0 ? Instant.ofEpochMilli(installedAt).atZone(ZoneId.systemDefault()).toLocalDate()
+                : LocalDate.now();
     }
 
     void showNewVersionAnnouncement() {

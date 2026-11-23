@@ -53,11 +53,19 @@ final class Editors {
     }
 
     void pickDate(LocalDate latest, Consumer<LocalDate> selected) {
+        pickDate(latest, null, latest, selected);
+    }
+
+    void pickDate(LocalDate initial, LocalDate earliest, LocalDate latest, Consumer<LocalDate> selected) {
         DatePickerDialog picker = new DatePickerDialog(activity,
                 (view, year, month, day) -> selected.accept(LocalDate.of(year, month + 1, day)),
-                latest.getYear(), latest.getMonthValue() - 1, latest.getDayOfMonth());
+                initial.getYear(), initial.getMonthValue() - 1, initial.getDayOfMonth());
+        ZoneId zone = ZoneId.systemDefault();
         picker.getDatePicker().setFirstDayOfWeek(Calendar.MONDAY);
-        picker.getDatePicker().setMaxDate(latest.atTime(LocalTime.MAX).atZone(ZoneId.systemDefault()).toInstant().toEpochMilli());
+        if (earliest != null) {
+            picker.getDatePicker().setMinDate(earliest.atStartOfDay(zone).toInstant().toEpochMilli());
+        }
+        picker.getDatePicker().setMaxDate(latest.atTime(LocalTime.MAX).atZone(zone).toInstant().toEpochMilli());
         picker.setButton(DialogInterface.BUTTON_POSITIVE, "确定", picker);
         picker.setButton(DialogInterface.BUTTON_NEGATIVE, "取消", picker);
         picker.show();
@@ -111,7 +119,7 @@ final class Editors {
         field(panel.form, "目标体重（kg）", weight, 0);
         if (current != null) {
             ui.add(panel.form, ui.button("移除目标", WHITE, RED, LINE, () -> confirm("移除目标体重",
-                    "移除后会停止显示达标预估。", "移除", RED,
+                    "移除目标后将关闭达标预测。", "移除", RED,
                     () -> save(panel, store::deleteGoal, "目标已移除"))), 11);
         }
         panel.actions("保存", GREEN, () -> {

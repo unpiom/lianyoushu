@@ -32,14 +32,16 @@ final class Review {
     private final Ui ui;
     private final Store store;
     private final Editors editors;
+    private final LocalDate firstInstallDate;
     private LocalDate selected;
     private View dayHeading;
 
-    Review(MainActivity activity, Ui ui, Store store, Editors editors, Bundle saved) {
+    Review(MainActivity activity, Ui ui, Store store, Editors editors, LocalDate firstInstallDate, Bundle saved) {
         this.activity = activity;
         this.ui = ui;
         this.store = store;
         this.editors = editors;
+        this.firstInstallDate = firstInstallDate;
         if (saved != null && saved.containsKey("reviewDate")) selected = LocalDate.parse(saved.getString("reviewDate"));
     }
 
@@ -163,9 +165,10 @@ final class Review {
                 if (day < 1 || day > month.lengthOfMonth()) cell = new Space(activity);
                 else {
                     LocalDate date = month.atDay(day);
-                    List<Journal.Session> sessions = date.isAfter(today) ? Collections.emptyList()
+                    boolean beforeInstall = date.isBefore(firstInstallDate);
+                    List<Journal.Session> sessions = beforeInstall || date.isAfter(today) ? Collections.emptyList()
                             : Journal.sessionsOn(date, plans, history, drafts);
-                    cell = dayCell(date, today, sessions);
+                    cell = dayCell(date, today, beforeInstall, sessions);
                 }
                 ui.weighted(row, cell, 1, column == 0 ? 0 : 2);
             }
@@ -174,12 +177,12 @@ final class Review {
         return card;
     }
 
-    private View dayCell(LocalDate date, LocalDate today, List<Journal.Session> sessions) {
+    private View dayCell(LocalDate date, LocalDate today, boolean beforeInstall, List<Journal.Session> sessions) {
         boolean active = date.equals(selected);
         boolean future = date.isAfter(today);
         int fill = date.equals(today) ? BACKGROUND : WHITE;
         int color = future ? 0xff87978d : TEXT;
-        String status = future ? "日期尚未到来" : "无训练安排";
+        String status = beforeInstall ? "安装前" : future ? "日期尚未到来" : "无训练安排";
         if (!sessions.isEmpty()) {
             int completed = 0;
             for (Journal.Session session : sessions) if (session.done) completed++;

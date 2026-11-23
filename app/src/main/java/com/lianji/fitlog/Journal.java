@@ -218,12 +218,13 @@ final class Journal {
         return weights.isEmpty() ? Double.NaN : sum / weights.size();
     }
 
-    enum ForecastStatus { WAITING, REACHED, NO_DECLINE, NEEDS_UPDATE, OUT_OF_RANGE, ESTIMATED }
+    enum ForecastStatus { WAITING, REACHED, NEEDS_UPDATE, NO_VARIATION, ESTIMATED }
 
-    private static final int MIN_PROBABILITY_RECORDS = 6;
-    private static final int MIN_PROBABILITY_SPAN_DAYS = 14;
-    private static final int MAX_LAST_RECORD_AGE_DAYS = 7;
-    private static final int MAX_PROBABILITY_HORIZON_DAYS = 56;
+    static final int FORECAST_WINDOW_DAYS = 30;
+    static final int MIN_FORECAST_RECORDS = 6;
+    static final int MIN_FORECAST_SPAN_DAYS = 5;
+    static final int MAX_LAST_RECORD_AGE_DAYS = 7;
+    static final int MAX_FORECAST_DAYS = 56;
     private static final int FORECAST_DRAWS = 4096;
 
     static final class Forecast {
@@ -233,46 +234,50 @@ final class Journal {
         final double kgPerWeek;
         final LocalDate date;
         final double probability;
+        final int maxDays;
+        final LocalDate deadline;
 
-        Forecast(ForecastStatus status, int records, long span, double kgPerWeek, LocalDate date) {
-            this(status, records, span, kgPerWeek, date, Double.NaN);
+        Forecast(ForecastStatus status, int records, long span, double kgPerWeek, LocalDate date,
+                 int maxDays, LocalDate deadline) {
+            this(status, records, span, kgPerWeek, date, Double.NaN, maxDays, deadline);
         }
 
-        Forecast(ForecastStatus status, int records, long span, double kgPerWeek, LocalDate date, double probability) {
+        Forecast(ForecastStatus status, int records, long span, double kgPerWeek, LocalDate date,
+                 double probability, int maxDays, LocalDate deadline) {
             this.status = status;
             this.records = records;
             this.span = span;
             this.kgPerWeek = kgPerWeek;
             this.date = date;
             this.probability = probability;
+            this.maxDays = maxDays;
+            this.deadline = deadline;
         }
     }
 
-    static Forecast forecast(List<Weight> weights, LocalDate today, double target) {
-        List<Weight> history = new ArrayList<>();
-        for (Weight weight : weights) {
-            if (!weight.date.isAfter(today)) history.add(weight);
+    static Forecast forecast(List<Weight> weights, LocalDate today, double target, LocalDate requestedDeadline) {
+        long requestedDays = ChronoUnit.DAYS.between(today, requestedDeadline);
+        if (requestedDays < 0 || requestedDays > MAX_FORECAST_DAYS) {
+            throw new IllegalArgumentException("Deadline outside forecast horizon");
         }
-        history.sort(Comparator.comparing(weight -> weight.date));
-        if (history.isEmpty()) return new Forecast(ForecastStatus.WAITING, 0, 0, 0, null);
-
-        Weight latest = history.get(history.size() - 1);
-        LocalDate recent = today.minusDays(29);
-        int first = history.size() - 1;
-        // Prefer the last 30 days. Extend backwards only to meet the data requirement.
-        while (first > 0) {
-            Weight oldestIncluded = history.get(first);
-            boolean enough = history.size() - first >= 4
-                    && ChronoUnit.DAYS.between(oldestIncluded.date, latest.date) >= 7;
-            if (enough && history.get(first - 1).date.isBefore(recent)) break;
-            first--;
-        }
-        List<Weight> sample = history.subList(first, history.size());
-        LocalDate start = sample.get(0).date;
+        List<Weight> sample = between(weights, today.minusDays(FORECAST_WINDOW_DAYS - 1), today);
+        sample.sort(Comparator.comparing(weight -> weight.date));
         int count = sample.size();
-        long span = ChronoUnit.DAYS.between(start, latest.date);
-        if (count < 4 || span < 7) return new Forecast(ForecastStatus.WAITING, count, span, 0, null);
-        if (latest.value <= target) return new Forecast(ForecastStatus.REACHED, count, span, 0, latest.date);
+        LocalDate start = count == 0 ? today : sample.get(0).date;
+        LocalDate lastDay = count == 0 ? today : sample.get(count - 1).date;
+        long span = ChronoUnit.DAYS.between(start, lastDay);
+        int maxDays = forecastLimit(span);
+        int deadlineDay = (int) Math.min(requestedDays, maxDays);
+        LocalDate deadline = today.plusDays(deadlineDay);
+        if (count > 0 && sample.get(count - 1).value <= target) {
+            return new Forecast(ForecastStatus.REACHED, count, span, 0, lastDay, maxDays, deadline);
+        }
+        if (count < MIN_FORECAST_RECORDS || span < MIN_FORECAST_SPAN_DAYS) {
+            return new Forecast(ForecastStatus.WAITING, count, span, 0, null, maxDays, deadline);
+        }
+        if (lastDay.isBefore(today.minusDays(MAX_LAST_RECORD_AGE_DAYS))) {
+            return new Forecast(ForecastStatus.NEEDS_UPDATE, count, span, 0, null, maxDays, deadline);
+        }
 
         double meanDay = 0;
         for (Weight weight : sample) meanDay += ChronoUnit.DAYS.between(start, weight.date);
@@ -287,42 +292,42 @@ final class Journal {
         }
         double slope = covariance / variance;
         double weekly = slope * 7;
-        if (slope >= -1e-9) return new Forecast(ForecastStatus.NO_DECLINE, count, span, weekly, null);
-
-        double days = Math.max(1, Math.ceil((latest.value - target) / -slope - 1e-9));
-        if (days > ChronoUnit.DAYS.between(latest.date, LocalDate.of(9999, 12, 31))) {
-            return new Forecast(ForecastStatus.OUT_OF_RANGE, count, span, weekly, null);
+        double squaredError = 0;
+        for (Weight weight : sample) {
+            double day = ChronoUnit.DAYS.between(start, weight.date) - meanDay;
+            double error = weight.value - (meanWeight + slope * day);
+            squaredError += error * error;
         }
-        LocalDate estimated = latest.date.plusDays((long) days);
-        if (estimated.isBefore(today)) {
-            return new Forecast(ForecastStatus.NEEDS_UPDATE, count, span, weekly, null);
+        if (squaredError <= 1e-12) {
+            return new Forecast(ForecastStatus.NO_VARIATION, count, span, weekly, null, maxDays, deadline);
         }
-        double probability = Double.NaN;
-        if (count >= MIN_PROBABILITY_RECORDS && span >= MIN_PROBABILITY_SPAN_DAYS && !start.isBefore(recent)
-                && !latest.date.isBefore(today.minusDays(MAX_LAST_RECORD_AGE_DAYS))
-                && ChronoUnit.DAYS.between(today, estimated) <= MAX_PROBABILITY_HORIZON_DAYS) {
-            double squaredError = 0;
-            for (Weight weight : sample) {
-                double day = ChronoUnit.DAYS.between(start, weight.date) - meanDay;
-                double error = weight.value - (meanWeight + slope * day);
-                squaredError += error * error;
-            }
-            double from = ChronoUnit.DAYS.between(start, today) - meanDay;
-            double until = ChronoUnit.DAYS.between(start, estimated) - meanDay;
-            probability = probabilityByDate(count, squaredError, variance, meanWeight - target, slope, from, until);
+        double todayOffset = ChronoUnit.DAYS.between(start, today) - meanDay;
+        int[] crossings = crossingDays(count, squaredError, variance, meanWeight - target, slope, todayOffset, maxDays);
+        int reached = 0;
+        double probability = 0;
+        LocalDate estimated = null;
+        for (int day = 0; day < crossings.length; day++) {
+            reached += crossings[day];
+            if (day == deadlineDay) probability = (double) reached / FORECAST_DRAWS;
+            if (estimated == null && reached * 2 >= FORECAST_DRAWS) estimated = today.plusDays(day);
         }
-        return new Forecast(ForecastStatus.ESTIMATED, count, span, weekly, estimated, probability);
+        return new Forecast(ForecastStatus.ESTIMATED, count, span, weekly, estimated, probability, maxDays, deadline);
     }
 
-    private static double probabilityByDate(int count, double squaredError, double daySumOfSquares,
-                                            double meanGap, double slope, double from, double until) {
-        if (squaredError <= 1e-12) return Double.NaN;
+    private static int forecastLimit(long span) {
+        if (span >= 14) return MAX_FORECAST_DAYS;
+        if (span >= 7) return 14;
+        return 7;
+    }
+
+    private static int[] crossingDays(int count, double squaredError, double daySumOfSquares,
+                                      double meanGap, double slope, double todayOffset, int maxDays) {
         // Sample the fitted line's joint posterior under a Gaussian residual model with unknown variance.
         // Centering the days makes the intercept and slope independent conditional on that variance.
         Random random = new Random(0L);
         double meanScale = 1.0 / Math.sqrt(count);
         double slopeScale = 1.0 / Math.sqrt(daySumOfSquares);
-        int reached = 0;
+        int[] crossings = new int[maxDays + 1];
         for (int draw = 0; draw < FORECAST_DRAWS; draw++) {
             double chiSquare = 0;
             for (int degree = 0; degree < count - 2; degree++) {
@@ -332,10 +337,15 @@ final class Journal {
             double residualScale = Math.sqrt(squaredError / chiSquare);
             double sampledGap = meanGap + residualScale * meanScale * random.nextGaussian();
             double sampledSlope = slope + residualScale * slopeScale * random.nextGaussian();
-            // A straight line reaches its minimum at one of the interval's endpoints.
-            if (sampledGap + sampledSlope * from <= 0 || sampledGap + sampledSlope * until <= 0) reached++;
+            double gapToday = sampledGap + sampledSlope * todayOffset;
+            if (gapToday <= 0) {
+                crossings[0]++;
+            } else if (sampledSlope < 0) {
+                double day = Math.ceil(gapToday / -sampledSlope);
+                if (day <= maxDays) crossings[(int) day]++;
+            }
         }
-        return (double) reached / FORECAST_DRAWS;
+        return crossings;
     }
 
     private Journal() { }
