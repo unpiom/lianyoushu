@@ -172,6 +172,14 @@ final class Editors {
 
     void editPlan(Journal.Plan plan, int numberField) {
         Panel panel = new Panel(plan == null ? "新建训练计划" : "编辑训练计划");
+        if (plan == null) {
+            Button reset = ui.button("重置计划", WHITE, RED, LINE, () -> confirm("重置训练计划",
+                    "当前每周计划将替换为内置计划，自建、导入的计划及修改会被清除。\n已打卡的训练和训练草稿会保留。",
+                    "确认重置", RED, () -> save(panel, store::resetPlans, "已恢复内置训练计划")));
+            LinearLayout.LayoutParams resetSize = new LinearLayout.LayoutParams(WRAP, WRAP);
+            resetSize.leftMargin = ui.dp(8);
+            panel.header.addView(reset, resetSize);
+        }
         EditText name = input(panel, "例如 全身力量", plan == null ? "" : plan.name, InputType.TYPE_CLASS_TEXT, 40);
         field(panel.form, "计划名称", name, 0);
         ui.add(panel.form, ui.text("训练日（每周重复）", 14, TEXT, true), 12);
@@ -400,6 +408,7 @@ final class Editors {
     private final class Panel {
         final Dialog dialog = new Dialog(activity);
         final LinearLayout root = ui.column();
+        final LinearLayout header = ui.row();
         final LinearLayout form = ui.column();
         final TextView error = ui.text("", 13, RED, false);
         final LinearLayout actions = ui.column();
@@ -409,7 +418,8 @@ final class Editors {
             root.setBackground(ui.shape(WHITE, 0, 23));
             root.setFocusableInTouchMode(true);
             ui.padding(root, 18, 17, 18, 16);
-            ui.add(root, ui.heading(title, 22), 0);
+            ui.weighted(header, ui.heading(title, 22), 1, 0);
+            ui.add(root, header, 0);
             ScrollView scroll = new ScrollView(activity);
             scroll.setVerticalScrollBarEnabled(false);
             scroll.addView(form, new ScrollView.LayoutParams(MATCH, WRAP));

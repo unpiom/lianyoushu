@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">练有数</string>
     <string name="update_announcement_title">更新公告</string>
-    <string name="update_notes">1. 新安装时预置一份每周示例计划，打开「训练」即可开始当天的训练。\n\n2. 「今天」页支持选择截止日。预计达标日和动态水位圆都根据近 30 天的体重趋势估算。至少记录 6 次且跨度满 5 天可开始估算，条件不足时圆内会显示原因。\n\n3. 复盘日历从首次安装当天开始按训练完成情况涂色。</string>
+    <string name="update_notes">1. 「训练 → 新建计划」新增「重置计划」。确认后用 4 个内置计划替换当前每周计划，保留打卡、训练草稿、体重和腰围记录。\n\n2. 「达标预测」将日期按钮改为「选择日期」，并调整预测范围提示。</string>
     <string name="check_in_undo">撤销打卡</string>
     <string name="check_in_confirm">确认打卡</string>
     <string name="check_in_lock_hint">确认后无法撤销。</string>
@@ -21,9 +21,9 @@
     <string name="forecast_below_half">到这一天的达标概率低于 50%</string>
     <string name="forecast_weight_trend">\n体重趋势 %1$+.2f kg/周</string>
     <string name="forecast_probability_title">达标概率</string>
-    <string name="forecast_deadline_button">截止日 %1$s</string>
+    <string name="forecast_deadline_button">选择日期 %1$s</string>
     <string name="forecast_deadline_a11y">选择截止日，当前为%1$s</string>
-    <string name="forecast_range">近 %1$d 天趋势结合已有时间跨度估算：最远可选 %2$d 天后</string>
+    <string name="forecast_range">近 %1$d 天趋势结合目前时间跨度估算：最远可预测第 %2$d 天后</string>
     <string name="forecast_probability_a11y">达标概率 %1$s</string>
     <string name="forecast_probability_number">%1$d%%</string>
     <string name="forecast_probability_low">&lt;5%</string>

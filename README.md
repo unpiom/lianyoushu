@@ -2,9 +2,9 @@
 
 练有数是一款免费的离线 Android 健身与体重记录应用。适用于 Android 8.0 及以上设备。
 
-[下载最新版 APK](https://github.com/unpiom/lianyoushu/releases/latest/download/lianyoushu.apk) · [下载内置示例计划 JSON](https://github.com/unpiom/lianyoushu/releases/latest/download/example-plan.json) · [版本记录](https://github.com/unpiom/lianyoushu/releases)
+[下载最新版 APK](https://github.com/unpiom/lianyoushu/releases/latest/download/lianyoushu.apk) · [下载内置示例计划 JSON](https://github.com/unpiom/lianyoushu/releases/latest/download/example-plan.json) · [版本记录](https://github.com/unpiom/lianyoushu/releases) · [正式发布行动记录](PLAN/)
 
-新安装时可在「训练」直接开练。已有用户可在「训练 → 每周计划 → 导入计划」导入同一份示例计划。
+新安装时可在「训练」直接开练。已有用户可在「训练 → 新建计划」点「重置计划」，确认后用 4 个内置计划替换当前每周计划。通过「训练 → 每周计划 → 导入计划」也可单独添加示例计划。
 
 觉得好用，欢迎给项目点个 Star。
 
@@ -35,4 +35,4 @@ powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\build.ps1
 
 构建产物默认为仓库目录下的 `练有数.apk`。依赖已缓存时可加 `-Offline` 离线构建，也可用 `-OutputApk` 指定输出路径。构建脚本在 `.build/signing` 保存本地签名材料。使用相同签名的 APK 即可覆盖更新，保留应用数据。
 
-应用内更新读取 `unpiom/lianyoushu` 的 GitHub Releases。正式发布时，标签应与 APK 版本对应（例如 `v1.4.0`），APK 附件名为 `lianyoushu.apk`，并使用原签名和递增的 `versionCode`。同时附上随包的 [example-plan.json](app/src/main/assets/example-plan.json)，供 README 的示例计划入口下载。发布前更新 `strings.xml` 中的 `update_notes`，覆盖升级后可离线查看公告。
+应用内更新读取 `unpiom/lianyoushu` 的 GitHub Releases。正式发布时，标签应与 APK 版本对应（例如 `v1.4.1`），APK 附件名为 `lianyoushu.apk`，并使用原签名和递增的 `versionCode`。同时附上随包的 [example-plan.json](app/src/main/assets/example-plan.json)，供 README 的示例计划入口下载。发布前更新 `strings.xml` 中的 `update_notes`，覆盖升级后可离线查看公告。每个正式版在 [PLAN](PLAN/) 中记录改动、验证和发布结果。

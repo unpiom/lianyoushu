@@ -37,10 +37,16 @@ final class Store extends SQLiteOpenHelper {
                 + "finished_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, plan_id))");
         db.execSQL("CREATE TABLE goal (id INTEGER PRIMARY KEY CHECK (id = 1), kg REAL NOT NULL)");
         createActivityTables(db);
+        for (Journal.Plan plan : defaultPlans()) {
+            db.insertOrThrow("plans", null, planValues(plan));
+        }
+    }
+
+    private List<Journal.Plan> defaultPlans() {
         try (InputStream stream = context.getAssets().open("example-plan.json")) {
-            for (Journal.Plan plan : PlanFiles.decode(stream)) {
-                db.insertOrThrow("plans", null, planValues(plan));
-            }
+            List<Journal.Plan> plans = PlanFiles.decode(stream);
+            if (plans.isEmpty()) throw new IllegalStateException("The bundled training plan is empty");
+            return plans;
         } catch (IOException | JSONException error) {
             throw new IllegalStateException("Unable to load the bundled training plan", error);
         }
@@ -200,6 +206,26 @@ final class Store extends SQLiteOpenHelper {
             }
             db.setTransactionSuccessful();
             return added;
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    void resetPlans() {
+        List<ContentValues> missing = new ArrayList<>();
+        for (Journal.Plan plan : defaultPlans()) missing.add(planValues(plan));
+
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            // Keep unchanged plans linked to their existing check-ins and drafts.
+            for (Journal.Plan plan : plans()) {
+                if (!missing.remove(planValues(plan))) {
+                    db.delete("plans", "id = ?", new String[]{Long.toString(plan.id)});
+                }
+            }
+            for (ContentValues values : missing) db.insertOrThrow("plans", null, values);
+            db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
         }
