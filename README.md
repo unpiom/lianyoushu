@@ -24,10 +24,10 @@
 
 ## 本地构建
 
-Windows 需要 PowerShell 7、JDK 17 或更新版本、Gradle 8.11.1、Android SDK Platform 35 和 Build Tools 35.0.1。设置 `JAVA_HOME` 和 `ANDROID_HOME` 后，在仓库目录运行下列命令。Gradle 可通过 `PATH` 或 `-Gradle` 参数指定。
+Windows 可使用系统自带的 Windows PowerShell 5.1，也支持 PowerShell 7。构建需要 JDK 17 或更新版本、Gradle 8.11.1、Android SDK Platform 35 和 Build Tools 35.0.1。设置 `JAVA_HOME` 和 `ANDROID_HOME` 后，在仓库目录运行下列命令。Gradle 可通过 `PATH` 或 `-Gradle` 参数指定。
 
 ```powershell
-pwsh -NoProfile -File .\build.ps1
+powershell.exe -NoProfile -ExecutionPolicy RemoteSigned -File .\build.ps1
 ```
 
 构建产物为仓库目录下的 `练有数.apk`。构建脚本在 `.build/signing` 保存本地签名材料。使用相同签名的 APK 即可覆盖更新，保留应用数据。

@@ -1,4 +1,4 @@
-param(
+﻿param(
     [string]$JavaHome = $env:JAVA_HOME,
     [string]$AndroidSdk = $env:ANDROID_HOME,
     [string]$Gradle
@@ -59,8 +59,14 @@ try {
     if (!(Test-Path -LiteralPath $key)) {
         if (!(Test-Path -LiteralPath $passwordFile)) {
             $secret = [byte[]]::new(24)
-            [System.Security.Cryptography.RandomNumberGenerator]::Fill($secret)
-            [IO.File]::WriteAllText($passwordFile, [Convert]::ToHexString($secret), [Text.Encoding]::ASCII)
+            $generator = [System.Security.Cryptography.RandomNumberGenerator]::Create()
+            try {
+                $generator.GetBytes($secret)
+            } finally {
+                $generator.Dispose()
+            }
+            $password = [BitConverter]::ToString($secret).Replace('-', '')
+            [IO.File]::WriteAllText($passwordFile, $password, [Text.Encoding]::ASCII)
         }
         Invoke-BuildTool $keytool @('-genkeypair','-alias','lianji','-keystore',$key,'-storetype','PKCS12',
             '-storepass:file',$passwordFile,'-keyalg','RSA','-keysize','3072','-validity','10000',

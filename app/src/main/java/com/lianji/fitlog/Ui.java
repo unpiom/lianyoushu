@@ -12,12 +12,15 @@ import android.graphics.drawable.RippleDrawable;
 import android.os.Build;
 import android.text.Layout;
 import android.util.TypedValue;
+import android.view.GestureDetector;
 import android.view.Gravity;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
 import android.view.WindowInsets;
 import android.view.WindowInsetsController;
+import android.view.accessibility.AccessibilityNodeInfo;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.Space;
@@ -40,7 +43,7 @@ final class Ui {
     static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
     static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
 
-    enum Icon { HOME, SCALE, TRAINING, CHECK, CHEVRON, CALENDAR, TARGET }
+    enum Icon { HOME, SCALE, TRAINING, CHECK, CALENDAR, TARGET }
 
     private final Context context;
 
@@ -133,6 +136,39 @@ final class Ui {
         TextView view = text(value, size, TEXT, true);
         if (android.os.Build.VERSION.SDK_INT >= 28) view.setAccessibilityHeading(true);
         return view;
+    }
+
+    void editNumber(TextView value, String label, Runnable edit) {
+        boolean editable = edit != null;
+        int flags = value.getPaintFlags();
+        value.setPaintFlags(editable ? flags | Paint.UNDERLINE_TEXT_FLAG : flags & ~Paint.UNDERLINE_TEXT_FLAG);
+        value.setOnClickListener(editable ? view -> edit.run() : null);
+        value.setClickable(editable);
+        value.setFocusable(editable);
+        value.setOnTouchListener(null);
+        value.setAccessibilityDelegate(null);
+        if (!editable) return;
+
+        // Keep the standard click action for keyboard and accessibility activation.
+        value.setAccessibilityDelegate(new View.AccessibilityDelegate() {
+            @Override public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
+                super.onInitializeAccessibilityNodeInfo(host, info);
+                info.removeAction(AccessibilityNodeInfo.AccessibilityAction.ACTION_CLICK);
+                info.addAction(new AccessibilityNodeInfo.AccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, label));
+            }
+        });
+        GestureDetector detector = new GestureDetector(context, new GestureDetector.SimpleOnGestureListener() {
+            @Override public boolean onDown(MotionEvent event) { return true; }
+
+            @Override public boolean onDoubleTapEvent(MotionEvent event) {
+                if (event.getActionMasked() == MotionEvent.ACTION_UP) value.performClick();
+                return true;
+            }
+        });
+        value.setOnTouchListener((view, event) -> {
+            detector.onTouchEvent(event);
+            return true;
+        });
     }
 
     GradientDrawable shape(int color, int border, int radius) {
@@ -272,9 +308,6 @@ final class Ui {
                         break;
                     case CHECK:
                         lines(canvas, 5, 12, 10, 17, 19, 7);
-                        break;
-                    case CHEVRON:
-                        lines(canvas, 9, 6, 15, 12, 9, 18);
                         break;
                     case CALENDAR:
                         canvas.drawRoundRect(3, 5, 21, 21, 3, 3, paint);

@@ -34,6 +34,8 @@ import java.util.function.Consumer;
 import static com.lianji.fitlog.Ui.*;
 
 final class Editors {
+    static final int PLAN_MINUTES = -1;
+    private static final int PLAN_OVERVIEW = -2;
     private static final int DECIMAL = InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL;
     private static final int INTEGER = InputType.TYPE_CLASS_NUMBER;
     private final MainActivity activity;
@@ -99,7 +101,7 @@ final class Editors {
                 save(panel, () -> store.saveWeight(date, kg, false), "体重已记录");
             }
         });
-        panel.show();
+        panel.show(current == null ? null : weight);
     }
 
     void editGoal() {
@@ -116,7 +118,7 @@ final class Editors {
             Double kg = decimal(weight, panel, "kg");
             if (kg != null) save(panel, () -> store.saveGoal(kg), "目标已保存");
         });
-        panel.show();
+        panel.show(weight);
     }
 
     void editWaist(LocalDate date) {
@@ -132,7 +134,7 @@ final class Editors {
             Double cm = decimal(value, panel, "cm");
             if (cm != null && !date.isAfter(LocalDate.now())) save(panel, () -> store.saveWaist(date, cm), "腰围已记录");
         });
-        panel.show();
+        panel.show(current == null ? null : value);
     }
 
     void quickCheckIn(Journal.Session session) {
@@ -157,6 +159,10 @@ final class Editors {
     }
 
     void editPlan(Journal.Plan plan) {
+        editPlan(plan, PLAN_OVERVIEW);
+    }
+
+    void editPlan(Journal.Plan plan, int numberField) {
         Panel panel = new Panel(plan == null ? "新建训练计划" : "编辑训练计划");
         EditText name = input(panel, "例如 全身力量", plan == null ? "" : plan.name, InputType.TYPE_CLASS_TEXT, 40);
         field(panel.form, "计划名称", name, 0);
@@ -245,7 +251,9 @@ final class Editors {
             Journal.Plan updated = new Journal.Plan(plan == null ? 0 : plan.id, title, mask, duration, exercises);
             save(panel, () -> store.savePlan(updated), "训练计划已保存");
         });
-        panel.show();
+        EditText focus = numberField == PLAN_MINUTES ? minutes : null;
+        if (numberField >= 0) focus = fields.get(numberField).sets;
+        panel.show(focus);
     }
 
     private ExerciseInput addExercise(Panel panel, LinearLayout list, List<ExerciseInput> fields, Journal.Exercise exercise) {
@@ -425,13 +433,22 @@ final class Editors {
         }
 
         void show() {
+            show(null);
+        }
+
+        void show(EditText field) {
             Window window = dialog.getWindow();
             if (window == null) return;
             window.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));
             window.setDimAmount(0.42f);
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE
-                    | WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN);
-            root.requestFocus();
+                    | (field == null ? WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_HIDDEN
+                    : WindowManager.LayoutParams.SOFT_INPUT_STATE_ALWAYS_VISIBLE));
+            if (field == null) root.requestFocus();
+            else {
+                field.requestFocus();
+                field.selectAll();
+            }
             dialog.show();
             int width = activity.getResources().getDisplayMetrics().widthPixels - ui.dp(40);
             window.setLayout(Math.min(width, ui.dp(508)), WRAP);

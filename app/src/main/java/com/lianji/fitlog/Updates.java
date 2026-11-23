@@ -18,6 +18,8 @@ import android.os.Build;
 import android.os.Bundle;
 import android.provider.Settings;
 import android.util.Log;
+import android.view.Gravity;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import org.json.JSONArray;
@@ -49,6 +51,7 @@ final class Updates {
     private static final String ASSET = "lianyoushu.apk";
     private static final String RELEASE_STATE = "update_release";
     private static final String LAST_OPENED_VERSION = "last_opened_version";
+    private static final String LAST_ANNOUNCEMENT = "last_announcement";
     private static final Pattern VERSION = Pattern.compile("(?:0|[1-9][0-9]{0,8})(?:\\.(?:0|[1-9][0-9]{0,8})){2}");
     private static final Pattern DIGEST = Pattern.compile("sha256:[0-9a-f]{64}");
     private static final int MAX_RELEASE_BYTES = 1024 * 1024;
@@ -78,17 +81,33 @@ final class Updates {
         SharedPreferences preferences = activity.getSharedPreferences("app_updates", Context.MODE_PRIVATE);
         long previous = preferences.getLong(LAST_OPENED_VERSION, 0);
         long current = versionCode(installed);
-        if (current <= previous) return;
+        if (current < previous) return;
 
-        if (previous != 0 || installed.firstInstallTime != installed.lastUpdateTime) {
-            new AlertDialog.Builder(activity)
-                    .setTitle(activity.getString(R.string.update_announcement_title, currentVersion()))
-                    .setMessage(R.string.update_notes)
-                    .setPositiveButton("知道了", null)
-                    .show();
+        String notes = activity.getString(R.string.update_notes);
+        String announcement = current + ":" + Integer.toHexString(notes.hashCode());
+        if (announcement.equals(preferences.getString(LAST_ANNOUNCEMENT, null))) return;
+
+        if (!preferences.edit().putLong(LAST_OPENED_VERSION, current).putString(LAST_ANNOUNCEMENT, announcement).commit()) {
+            Log.w("Lianji", "Could not save announcement state");
         }
-        if (!preferences.edit().putLong(LAST_OPENED_VERSION, current).commit()) {
-            Log.w("Lianji", "Could not save the last opened app version");
+        if (previous != 0 || installed.firstInstallTime != installed.lastUpdateTime) showAnnouncement(notes);
+    }
+
+    private void showAnnouncement(String notes) {
+        Ui ui = new Ui(activity);
+        TextView title = ui.heading(activity.getString(R.string.update_announcement_title), 22);
+        title.setGravity(Gravity.CENTER);
+        ui.padding(title, 24, 21, 24, 0);
+        AlertDialog dialog = new AlertDialog.Builder(activity)
+                .setCustomTitle(title)
+                .setMessage(notes)
+                .setPositiveButton("知道了", null)
+                .show();
+        TextView message = dialog.findViewById(android.R.id.message);
+        if (message != null) {
+            message.setTypeface(activity.getResources().getFont(R.font.announcement_kai));
+            message.setTextSize(17);
+            message.setLineSpacing(ui.dp(3), 1f);
         }
     }
 

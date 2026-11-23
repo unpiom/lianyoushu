@@ -14,34 +14,34 @@ import java.time.format.DateTimeFormatter;
 import java.time.temporal.ChronoUnit;
 import java.util.List;
 import java.util.Locale;
+import java.util.function.Consumer;
 
-final class MeasurementChart extends View {
-    interface Selection {
-        void onSelected(Journal.Measurement reading);
-    }
-
+final class MeasurementChart<T extends Journal.Measurement> extends View {
     private static final DateTimeFormatter AXIS_DATE = DateTimeFormatter.ofPattern("M/d", Locale.SIMPLIFIED_CHINESE);
     private static final int[] TICKS = {0, 7, 14, 21, 29};
+    private static final int LOW_POINT_BLUE = 0xff3470b5;
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final Path line = new Path();
     private final Path area = new Path();
     private final Ui ui;
-    private final List<? extends Journal.Measurement> data;
+    private final List<T> data;
     private final LocalDate start;
-    private final Selection selection;
+    private final Consumer<T> selection;
     private final String metric;
     private final String unit;
     private final double low;
     private final double high;
     private final int gridIntervals;
+    private final Journal.Measurement minimum;
+    private final Journal.Measurement maximum;
     private int selected = -1;
     private float left;
     private float right;
     private float top;
     private float bottom;
 
-    MeasurementChart(Context context, LocalDate today, List<? extends Journal.Measurement> data,
-                     String metric, String unit, Selection selection) {
+    MeasurementChart(Context context, LocalDate today, List<T> data, String metric, String unit,
+                     boolean markExtremes, Consumer<T> selection) {
         super(context);
         ui = new Ui(context);
         start = today.minusDays(29);
@@ -49,21 +49,25 @@ final class MeasurementChart extends View {
         this.metric = metric;
         this.unit = unit;
         this.selection = selection;
-        double min = Double.POSITIVE_INFINITY;
-        double max = Double.NEGATIVE_INFINITY;
+        Journal.Measurement lowest = null;
+        Journal.Measurement highest = null;
         for (Journal.Measurement point : data) {
-            min = Math.min(min, point.value);
-            max = Math.max(max, point.value);
+            if (lowest == null || point.value < lowest.value
+                    || (point.value == lowest.value && point.date.isAfter(lowest.date))) lowest = point;
+            if (highest == null || point.value > highest.value
+                    || (point.value == highest.value && point.date.isAfter(highest.date))) highest = point;
         }
-        if (data.isEmpty()) {
+        minimum = markExtremes ? lowest : null;
+        maximum = markExtremes ? highest : null;
+        if (lowest == null) {
             low = 0;
             high = 1;
             gridIntervals = 3;
             setImportantForAccessibility(IMPORTANT_FOR_ACCESSIBILITY_NO);
         } else {
-            double padding = Math.max(0.25, (max - min) * 0.15);
-            double paddedLow = Math.max(0, min - padding);
-            double paddedHigh = max + padding;
+            double padding = Math.max(0.25, (highest.value - lowest.value) * 0.15);
+            double paddedLow = Math.max(0, lowest.value - padding);
+            double paddedHigh = highest.value + padding;
             double step = gridStep((paddedHigh - paddedLow) / 3);
             low = Math.floor(paddedLow / step) * step;
             high = Math.ceil(paddedHigh / step) * step;
@@ -135,6 +139,25 @@ final class MeasurementChart extends View {
         canvas.drawCircle(x(point), y(point), ui.dp(6), paint);
         paint.setColor(Ui.GREEN);
         canvas.drawCircle(x(point), y(point), ui.dp(4), paint);
+
+        if (maximum != null) {
+            drawExtremum(canvas, maximum, Ui.RED, maximum == minimum);
+            if (maximum != minimum) drawExtremum(canvas, minimum, LOW_POINT_BLUE, false);
+        }
+    }
+
+    private void drawExtremum(Canvas canvas, Journal.Measurement point, int color, boolean shared) {
+        float x = x(point);
+        float y = y(point);
+        float radius = ui.dp(4);
+        paint.setColor(Ui.WHITE);
+        canvas.drawCircle(x, y, ui.dp(6), paint);
+        paint.setColor(color);
+        canvas.drawCircle(x, y, radius, paint);
+        if (shared) {
+            paint.setColor(LOW_POINT_BLUE);
+            canvas.drawArc(x - radius, y - radius, x + radius, y + radius, -90, 180, true, paint);
+        }
     }
 
     private static double gridStep(double approximate) {
@@ -180,14 +203,16 @@ final class MeasurementChart extends View {
 
     private void select(int index) {
         selected = index;
-        selection.onSelected(data.get(index));
+        selection.accept(data.get(index));
         describeSelection();
         invalidate();
     }
 
     private void describeSelection() {
         Journal.Measurement point = data.get(selected);
+        String extremum = point == maximum ? (point == minimum ? "，最高及最低" : "，最高")
+                : point == minimum ? "，最低" : "";
         setContentDescription("近 30 天" + metric + "曲线，当前为 " + AXIS_DATE.format(point.date)
-                + "，" + MainActivity.kg(point.value) + " " + unit);
+                + "，" + MainActivity.kg(point.value) + " " + unit + extremum);
     }
 }

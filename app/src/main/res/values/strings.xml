@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">练有数</string>
-    <string name="update_announcement_title">练有数 %1$s 更新公告</string>
-    <string name="update_notes">首页底部的 GitHub 项目主页与 Star 提示并排，右侧文案单行显示。\n\n检查更新时，若已是最新发布版，显示「当前已是最新发布版。」\n\n复盘日历按训练计划的确认打卡进度着色。全部完成为绿色，部分完成为淡绿色，完全未完成为红色。</string>
+    <string name="update_announcement_title">更新公告</string>
+    <string name="update_notes">1. 今天页移除训练计划列表，预计达标日期下方用独立的水位圆显示达标概率。可编辑数值支持双击修改。\n\n2. 点击复盘日历中的日期，可查看当天未完成的训练并补打卡。\n\n3. 体重曲线用红点标记最高值、蓝点标记最低值。数值并列时，标记最新日期。</string>
     <string name="check_in_undo">撤销打卡</string>
     <string name="check_in_confirm">确认打卡</string>
     <string name="check_in_lock_hint">确认后无法撤销。</string>

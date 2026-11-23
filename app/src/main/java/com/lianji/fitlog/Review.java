@@ -16,8 +16,8 @@ import java.time.LocalDate;
 import java.time.YearMonth;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
-import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 
@@ -31,12 +31,15 @@ final class Review {
     private final MainActivity activity;
     private final Ui ui;
     private final Store store;
+    private final Editors editors;
     private LocalDate selected;
+    private View dayHeading;
 
-    Review(MainActivity activity, Ui ui, Store store, Bundle saved) {
+    Review(MainActivity activity, Ui ui, Store store, Editors editors, Bundle saved) {
         this.activity = activity;
         this.ui = ui;
         this.store = store;
+        this.editors = editors;
         if (saved != null && saved.containsKey("reviewDate")) selected = LocalDate.parse(saved.getString("reviewDate"));
     }
 
@@ -44,7 +47,8 @@ final class Review {
         if (selected != null) state.putString("reviewDate", selected.toString());
     }
 
-    void show(LinearLayout page, LocalDate today, List<Journal.Weight> weights, List<Journal.Plan> plans) {
+    void show(LinearLayout page, LocalDate today, List<Journal.Weight> weights, List<Journal.Plan> plans,
+              List<Journal.WorkoutDraft> drafts) {
         if (selected == null || selected.isAfter(today)) selected = today;
         LocalDate monday = selected.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
         LocalDate sunday = monday.plusDays(6);
@@ -52,17 +56,20 @@ final class Review {
         ui.add(page, weekCard(today, monday, sunday, checkIns, weights), 0);
         YearMonth month = YearMonth.from(selected);
         List<Journal.Session> history = store.checkIns(month.atDay(1), month.atEndOfMonth());
-        ui.add(page, calendar(today, month, plans, history), 13);
+        ui.add(page, calendar(today, month, plans, history, drafts), 13);
 
-        ui.add(page, ui.heading(DAY.format(selected) + "训练", 18), 17);
-        List<Journal.Session> day = new ArrayList<>();
-        for (Journal.Session session : history) if (session.date.equals(selected)) day.add(session);
+        dayHeading = ui.heading(DAY.format(selected) + "训练", 18);
+        ui.add(page, dayHeading, 17);
+        List<Journal.Session> day = Journal.sessionsOn(selected, plans, history, drafts);
+        day.sort(Comparator.comparing(session -> session.done));
         if (day.isEmpty()) {
             LinearLayout empty = ui.card();
-            ui.add(empty, ui.text("这天暂无训练记录。", 14, MUTED, false), 0);
+            ui.add(empty, ui.text("这天没有训练安排或打卡记录。", 14, MUTED, false), 0);
             ui.add(page, empty, 8);
         } else {
-            for (Journal.Session session : day) ui.add(page, sessionCard(session), 8);
+            for (Journal.Session session : day) {
+                ui.add(page, session.done ? sessionCard(session) : activity.trainingCard(session), 8);
+            }
         }
         ui.add(page, waistCard(today), 13);
     }
@@ -122,7 +129,8 @@ final class Review {
         return Double.isNaN(kg) ? "—" : MainActivity.kg(kg) + " kg";
     }
 
-    private View calendar(LocalDate today, YearMonth month, List<Journal.Plan> plans, List<Journal.Session> history) {
+    private View calendar(LocalDate today, YearMonth month, List<Journal.Plan> plans, List<Journal.Session> history,
+                          List<Journal.WorkoutDraft> drafts) {
         LinearLayout card = ui.card();
         LinearLayout toolbar = ui.row();
         Button previous = ui.secondary("‹", () -> changeMonth(month.minusMonths(1), today));
@@ -156,7 +164,7 @@ final class Review {
                 else {
                     LocalDate date = month.atDay(day);
                     List<Journal.Session> sessions = date.isAfter(today) ? Collections.emptyList()
-                            : Journal.sessionsOn(date, plans, history);
+                            : Journal.sessionsOn(date, plans, history, drafts);
                     cell = dayCell(date, today, sessions);
                 }
                 ui.weighted(row, cell, 1, column == 0 ? 0 : 2);
@@ -202,6 +210,7 @@ final class Review {
                     selected = date;
                     activity.refresh();
                 }
+                activity.reveal(dayHeading);
             });
         }
         TextView number = ui.text(Integer.toString(date.getDayOfMonth()), 13, color, true);
@@ -265,17 +274,19 @@ final class Review {
             ui.add(card, ui.text("记录腰围后生成曲线。", 14, MUTED, false), 8);
             return card;
         }
-        TextView selection = ui.text(waistLabel(readings.get(readings.size() - 1)), 14, MUTED, true);
+        TextView selection = ui.text("", 14, GREEN, true);
+        showWaistValue(selection, readings.get(readings.size() - 1));
         ui.add(card, selection, 8);
-        MeasurementChart chart = new MeasurementChart(activity, today, readings, "腰围", "厘米",
-                value -> selection.setText(waistLabel(value)));
+        MeasurementChart<Journal.Measurement> chart = new MeasurementChart<>(activity, today, readings, "腰围", "厘米",
+                false, value -> showWaistValue(selection, value));
         LinearLayout.LayoutParams chartSize = new LinearLayout.LayoutParams(MATCH, ui.dp(149));
         chartSize.topMargin = ui.dp(4);
         card.addView(chart, chartSize);
         return card;
     }
 
-    private String waistLabel(Journal.Measurement value) {
-        return DAY.format(value.date) + "  ·  " + MainActivity.kg(value.value) + " cm";
+    private void showWaistValue(TextView label, Journal.Measurement value) {
+        label.setText(DAY.format(value.date) + "  ·  " + MainActivity.kg(value.value) + " cm");
+        ui.editNumber(label, "编辑腰围", () -> editors.editWaist(value.date));
     }
 }

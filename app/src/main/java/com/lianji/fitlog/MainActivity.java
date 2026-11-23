@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.Context;
 import android.content.Intent;
 import android.content.res.Configuration;
+import android.graphics.Rect;
 import android.os.Bundle;
 import android.os.LocaleList;
 import android.text.TextUtils;
@@ -73,7 +74,7 @@ public final class MainActivity extends Activity {
         ui = new Ui(this);
         store = new Store(this);
         editors = new Editors(this, ui, store);
-        review = new Review(this, ui, store, state);
+        review = new Review(this, ui, store, editors, state);
         planFiles = new PlanFiles(this);
         updates = new Updates(this, state);
         int previousScroll = 0;
@@ -132,6 +133,25 @@ public final class MainActivity extends Activity {
         render(scroll.getScrollY());
     }
 
+    void reveal(View view) {
+        ScrollView current = scroll;
+        Runnable scrollToView = () -> {
+            if (current != scroll) return;
+            Rect bounds = new Rect();
+            view.getDrawingRect(bounds);
+            current.offsetDescendantRectToMyCoords(view, bounds);
+            current.smoothScrollTo(0, bounds.top - ui.dp(6));
+        };
+        if (view.isLaidOut()) scrollToView.run();
+        else view.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+            @Override public void onLayoutChange(View child, int left, int top, int right, int bottom,
+                                                 int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                child.removeOnLayoutChangeListener(this);
+                current.post(scrollToView);
+            }
+        });
+    }
+
     boolean write(Runnable action) {
         try {
             action.run();
@@ -177,7 +197,7 @@ public final class MainActivity extends Activity {
         if (tab == TODAY) showToday(page);
         else if (tab == WEIGHT) showWeight(page);
         else if (tab == TRAINING) showTraining(page);
-        else review.show(page, today, weights, plans);
+        else review.show(page, today, weights, plans, drafts);
 
         setContentView(root);
         root.requestApplyInsets();
@@ -282,22 +302,11 @@ public final class MainActivity extends Activity {
         ui.add(hero, actions, 12);
         ui.add(page, hero, 0);
 
-        LinearLayout training = ui.card();
-        showProgress(training, "本周训练");
-        List<Journal.Session> sessions = week.on(today);
-        if (plans.isEmpty()) {
-            ui.add(training, ui.text("还没有训练计划。", 14, MUTED, false), 11);
-            ui.add(training, ui.secondary("新建计划", () -> editors.editPlan(null)), 8);
-        } else {
-            if (sessions.isEmpty()) ui.add(training, ui.text("今天没有训练安排。", 14, MUTED, false), 11);
-            ui.add(training, ui.secondary("查看本周安排", () -> switchTab(TRAINING)), 10);
+        Journal.Forecast forecast = goal == null ? null : Journal.forecast(weights, today, goal);
+        ui.add(page, forecastCard(forecast), 13);
+        if (forecast != null && forecast.status == Journal.ForecastStatus.ESTIMATED) {
+            ui.add(page, probabilityCard(forecast), 10);
         }
-        for (Journal.Session session : sessions) {
-            ui.divider(training, 12);
-            showSession(training, session, false, 10);
-        }
-        ui.add(page, training, 13);
-        ui.add(page, forecastCard(), 13);
         LinearLayout version = ui.row();
         ui.weighted(version, ui.text("版本 " + updates.currentVersion(), 13, MUTED, false), 1, 0);
         version.addView(ui.secondary("检查更新", updates::check));
@@ -335,20 +344,25 @@ public final class MainActivity extends Activity {
         return row;
     }
 
-    private View forecastCard() {
+    private View forecastCard(Journal.Forecast forecast) {
         LinearLayout card = ui.card();
         LinearLayout bar = ui.row();
         bar.addView(ui.icon(Icon.TARGET, GREEN, 20));
         ui.weighted(bar, ui.heading("达标预估", 18), 1, 8);
-        bar.addView(ui.button(goal == null ? "设置目标" : "编辑目标", TINT, GREEN, 0, editors::editGoal));
+        if (forecast == null) bar.addView(ui.secondary("设置目标", editors::editGoal));
         ui.add(card, bar, 0);
-        if (goal == null) {
+        if (forecast == null) {
             ui.add(card, ui.text("设置目标体重后，可根据近期走势查看预计日期。", 14, MUTED, false), 8);
             return card;
         }
 
-        ui.add(card, ui.text("目标体重  " + kg(goal) + " kg", 14, MUTED, false), 4);
-        Journal.Forecast forecast = Journal.forecast(weights, today, goal);
+        LinearLayout target = ui.row();
+        ui.weighted(target, ui.text("目标体重", 14, MUTED, false), 1, 0);
+        TextView goalValue = ui.pill(kg(goal) + " kg", TINT, GREEN);
+        goalValue.setContentDescription("目标体重 " + kg(goal) + " 公斤");
+        ui.editNumber(goalValue, "编辑目标体重", editors::editGoal);
+        target.addView(goalValue);
+        ui.add(card, target, 6);
         String result;
         String details;
         switch (forecast.status) {
@@ -383,6 +397,22 @@ public final class MainActivity extends Activity {
         return card;
     }
 
+    private View probabilityCard(Journal.Forecast forecast) {
+        LinearLayout card = ui.row();
+        card.setBackground(ui.shape(0xfff1f7f0, 0xffdce9df, 20));
+        ui.padding(card, 16, 12, 13, 12);
+        LinearLayout detail = ui.column();
+        ui.add(detail, ui.heading("达标概率", 18), 0);
+        ui.add(detail, ui.text("截至 " + FULL_DATE.format(forecast.date), 13, GREEN, true), 5);
+        boolean available = !Double.isNaN(forecast.probability);
+        ui.add(detail, ui.text(available ? "按近期体重走势估算" : "暂无法估计", 12, MUTED, false), 5);
+        ui.weighted(card, detail, 1, 0);
+        LinearLayout.LayoutParams gaugeSize = new LinearLayout.LayoutParams(ui.dp(102), ui.dp(102));
+        gaugeSize.leftMargin = ui.dp(8);
+        card.addView(new ProbabilityGauge(this, forecast.probability), gaugeSize);
+        return card;
+    }
+
     private void showWeight(LinearLayout page) {
         if (todayWeight == null) ui.add(page, ui.primary("记录今日体重", () -> editors.editWeight(LocalDate.now())), 0);
         List<Journal.Weight> recent = Journal.between(weights, today.minusDays(29), today);
@@ -398,7 +428,8 @@ public final class MainActivity extends Activity {
             showChartValue(selection, recent.get(recent.size() - 1));
             ui.add(chartCard, selection, 7);
         }
-        chartArea.addView(new MeasurementChart(this, today, recent, "体重", "公斤", value -> showChartValue(selection, value)),
+        chartArea.addView(new MeasurementChart<>(this, today, recent, "体重", "公斤", true,
+                        value -> showChartValue(selection, value)),
                 new FrameLayout.LayoutParams(MATCH, MATCH));
         if (recent.isEmpty()) {
             TextView empty = ui.pill("记录体重后生成曲线", BACKGROUND, MUTED);
@@ -421,22 +452,20 @@ public final class MainActivity extends Activity {
         if (weights.isEmpty()) ui.add(history, ui.text("暂无体重记录。", 14, MUTED, false), 0);
         for (int i = weights.size() - 1; i >= 0 && i >= weights.size() - historyLimit; i--) {
             Journal.Weight weight = weights.get(i);
-            boolean locked = weight.locked || !weight.date.isBefore(today);
+            boolean editable = canEdit(weight);
             LinearLayout row = ui.row();
             row.setMinimumHeight(ui.dp(48));
-            row.setContentDescription(FULL_DATE.format(weight.date) + "，" + kg(weight.value) + " 公斤，" + (locked ? "已确认" : "编辑记录"));
-            if (!locked) {
-                row.setBackground(ui.ripple(WHITE, 0, 9));
-                row.setFocusable(true);
-                row.setOnClickListener(view -> editors.editWeight(weight.date));
-            }
             TextView date = ui.text(FULL_DATE.format(weight.date), 14, TEXT, false);
             date.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
             ui.weighted(row, date, 1, 0);
-            TextView value = ui.text(kg(weight.value) + " kg", 15, TEXT, true);
-            value.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            TextView value = ui.text(kg(weight.value) + " kg", 15, editable ? GREEN : TEXT, true);
+            value.setContentDescription(FULL_DATE.format(weight.date) + "，" + kg(weight.value) + " 公斤"
+                    + (editable ? "" : "，已确认"));
+            if (editable) {
+                ui.padding(value, 8, 8, 0, 8);
+                ui.editNumber(value, "编辑体重", () -> editors.editWeight(weight.date));
+            }
             row.addView(value);
-            if (!locked) row.addView(ui.icon(Icon.CHEVRON, MUTED, 17));
             if (i < weights.size() - 1) ui.divider(history, 0);
             ui.add(history, row, 0);
         }
@@ -447,8 +476,14 @@ public final class MainActivity extends Activity {
         ui.add(page, history, 8);
     }
 
-    private void showChartValue(TextView label, Journal.Measurement weight) {
+    private boolean canEdit(Journal.Weight weight) {
+        return !weight.locked && weight.date.isBefore(today);
+    }
+
+    private void showChartValue(TextView label, Journal.Weight weight) {
         label.setText(HEADER_DATE.format(weight.date) + "  ·  " + kg(weight.value) + " kg");
+        label.setTextColor(canEdit(weight) ? GREEN : MUTED);
+        ui.editNumber(label, "编辑体重", canEdit(weight) ? () -> editors.editWeight(weight.date) : null);
     }
 
     private void showTraining(LinearLayout page) {
@@ -486,11 +521,7 @@ public final class MainActivity extends Activity {
             ui.add(empty, ui.text("这天没有训练安排。", 14, MUTED, false), 0);
             ui.add(page, empty, 8);
         }
-        for (Journal.Session session : sessions) {
-            LinearLayout card = ui.card();
-            showSession(card, session, true, 0);
-            ui.add(page, card, 8);
-        }
+        for (Journal.Session session : sessions) ui.add(page, trainingCard(session), 8);
 
         ui.add(page, ui.heading("每周计划", 18), 18);
         LinearLayout files = ui.row();
@@ -503,8 +534,12 @@ public final class MainActivity extends Activity {
             LinearLayout row = ui.row();
             LinearLayout info = ui.column();
             ui.add(info, ui.text(plan.name, 16, TEXT, true), 0);
-            ui.add(info, ui.text(dayLabels(plan.days) + " · " + plan.minutes + " 分钟", 13, MUTED, false), 3);
+            ui.add(info, ui.text(dayLabels(plan.days), 13, MUTED, false), 3);
             ui.weighted(row, info, 1, 0);
+            TextView minutes = ui.text(plan.minutes + " 分钟", 13, GREEN, true);
+            ui.padding(minutes, 8, 8, 8, 8);
+            ui.editNumber(minutes, "编辑训练时长", () -> editors.editPlan(plan, Editors.PLAN_MINUTES));
+            row.addView(minutes);
             Button edit = ui.secondary("编辑", () -> editors.editPlan(plan));
             edit.setContentDescription("编辑" + plan.name);
             row.addView(edit);
@@ -557,39 +592,58 @@ public final class MainActivity extends Activity {
         ui.progress(card, week.completed(), week.sessions.size(), 10);
     }
 
-    private void showSession(LinearLayout card, Journal.Session session, boolean showExercises, int margin) {
+    View trainingCard(Journal.Session session) {
+        Journal.WorkoutDraft draft = null;
+        if (!session.done) {
+            for (Journal.WorkoutDraft candidate : drafts) {
+                if (candidate.date.equals(session.date) && candidate.plan.id == session.plan.id) {
+                    draft = candidate;
+                    break;
+                }
+            }
+        }
+        Journal.Plan plan = draft == null ? session.plan : draft.plan;
+        boolean planEditable = !session.done && draft == null;
+        boolean future = session.date.isAfter(today);
+        LinearLayout card = ui.card();
         LinearLayout title = ui.row();
-        ui.weighted(title, ui.heading(session.plan.name, 16), 1, 0);
+        ui.weighted(title, ui.heading(plan.name, 16), 1, 0);
         if (session.done) title.addView(ui.pill("已打卡", TINT, GREEN));
-        else if (session.date.isAfter(today)) title.addView(ui.pill("待训练", BACKGROUND, MUTED));
-        ui.add(card, title, margin);
-        String length = session.durationSeconds == null ? session.plan.minutes + " 分钟计划" : Ui.duration(session.durationSeconds);
-        ui.add(card, ui.text(length + " · " + session.plan.exercises.size() + " 个动作", 13, MUTED, false), 2);
-        if (showExercises) {
-            ui.divider(card, 9);
-            for (Journal.Exercise exercise : session.plan.exercises) {
-                LinearLayout row = ui.row();
-                ui.weighted(row, ui.text(exercise.name, 15, TEXT, false), 1, 0);
-                row.addView(ui.text(exercise.sets + " 组", 14, GREEN, true));
-                ui.add(card, row, 6);
+        else title.addView(ui.pill(draft != null ? "训练草稿" : future ? "待训练" : "未打卡", BACKGROUND, MUTED));
+        ui.add(card, title, 0);
+        String length = session.durationSeconds == null ? plan.minutes + " 分钟计划" : Ui.duration(session.durationSeconds);
+        LinearLayout summary = ui.row();
+        TextView duration = ui.text(length, 13, planEditable ? GREEN : MUTED, false);
+        if (planEditable) ui.editNumber(duration, "编辑训练时长", () -> editors.editPlan(plan, Editors.PLAN_MINUTES));
+        summary.addView(duration);
+        ui.weighted(summary, ui.text("· " + plan.exercises.size() + " 个动作", 13, MUTED, false), 1, 5);
+        ui.add(card, summary, 2);
+        ui.divider(card, 9);
+        for (int i = 0; i < plan.exercises.size(); i++) {
+            Journal.Exercise exercise = plan.exercises.get(i);
+            LinearLayout row = ui.row();
+            ui.weighted(row, ui.text(exercise.name, 15, TEXT, false), 1, 0);
+            String sets = draft == null ? exercise.sets + " 组" : draft.completedSets(i) + " / " + exercise.sets + " 组";
+            TextView count = ui.text(sets, 14, GREEN, true);
+            if (planEditable) {
+                int exerciseIndex = i;
+                ui.editNumber(count, "编辑" + exercise.name + "的组数", () -> editors.editPlan(plan, exerciseIndex));
             }
+            row.addView(count);
+            ui.add(card, row, 6);
         }
-        if (!session.done && !session.date.isAfter(today)) {
-            boolean inProgress = false;
-            for (Journal.WorkoutDraft draft : drafts) {
-                if (draft.date.equals(session.date) && draft.plan.id == session.plan.id) inProgress = true;
-            }
-            if (inProgress) {
-                ui.add(card, ui.primary("继续训练", () -> openWorkout(session.date, session.plan.id)), 10);
-            } else if (session.date.equals(today)) {
-                LinearLayout actions = ui.row();
-                ui.weighted(actions, ui.primary("开始训练", () -> startWorkout(session)), 1.3f, 0);
-                ui.weighted(actions, ui.secondary("快速打卡", () -> editors.quickCheckIn(session)), 1, 8);
-                ui.add(card, actions, 10);
-            } else {
-                ui.add(card, ui.primary("补打卡", () -> editors.quickCheckIn(session)), 10);
-            }
+        if (session.done || future) return card;
+        if (draft != null) {
+            ui.add(card, ui.primary("继续训练", () -> openWorkout(session.date, plan.id)), 10);
+        } else if (session.date.equals(today)) {
+            LinearLayout actions = ui.row();
+            ui.weighted(actions, ui.primary("开始训练", () -> startWorkout(session)), 1.3f, 0);
+            ui.weighted(actions, ui.secondary("快速打卡", () -> editors.quickCheckIn(session)), 1, 8);
+            ui.add(card, actions, 10);
+        } else {
+            ui.add(card, ui.primary("补打卡", () -> editors.quickCheckIn(session)), 10);
         }
+        return card;
     }
 
     private void startWorkout(Journal.Session session) {

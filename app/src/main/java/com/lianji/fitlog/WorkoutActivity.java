@@ -162,16 +162,15 @@ public final class WorkoutActivity extends Activity {
         LinearLayout row = ui.row();
         LinearLayout label = ui.column();
         ui.add(label, ui.heading("组间休息", 17), 0);
-        ui.add(label, ui.text("每组 " + draft.restSeconds + " 秒", 13, MUTED, false), 2);
+        TextView duration = ui.text("每组 " + draft.restSeconds + " 秒", 14, GREEN, true);
+        ui.editNumber(duration, "编辑组间休息时长", this::chooseRest);
+        ui.add(label, duration, 3);
         ui.weighted(row, label, 1, 0);
         restClock = ui.text("", 26, GREEN, true);
         row.addView(restClock);
         ui.add(card, row, 0);
-        LinearLayout controls = ui.row();
-        ui.weighted(controls, ui.secondary("设置时长", this::chooseRest), 1, 0);
         skip = ui.secondary("跳过休息", () -> save(draft.withRest(draft.restSeconds, 0)));
-        ui.weighted(controls, skip, 1, 8);
-        ui.add(card, controls, 8);
+        ui.add(card, skip, 8);
         return card;
     }
 

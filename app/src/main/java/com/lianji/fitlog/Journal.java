@@ -5,9 +5,11 @@ import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
 import java.time.temporal.TemporalAdjusters;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Random;
 import java.util.TreeMap;
 
 final class Journal {
@@ -175,10 +177,19 @@ final class Journal {
     }
 
     static List<Session> sessionsOn(LocalDate date, List<Plan> plans, List<Session> checkIns) {
+        return sessionsOn(date, plans, checkIns, Collections.emptyList());
+    }
+
+    static List<Session> sessionsOn(LocalDate date, List<Plan> plans, List<Session> checkIns, List<WorkoutDraft> drafts) {
         Map<Long, Session> sessions = new TreeMap<>();
         for (Plan plan : plans) {
             if (plan.repeatsOn(date)) {
                 sessions.put(plan.id, new Session(date, plan, false));
+            }
+        }
+        for (WorkoutDraft draft : drafts) {
+            if (draft.date.equals(date)) {
+                sessions.put(draft.plan.id, new Session(date, draft.plan, false));
             }
         }
         for (Session checkIn : checkIns) {
@@ -209,19 +220,31 @@ final class Journal {
 
     enum ForecastStatus { WAITING, REACHED, NO_DECLINE, NEEDS_UPDATE, OUT_OF_RANGE, ESTIMATED }
 
+    private static final int MIN_PROBABILITY_RECORDS = 6;
+    private static final int MIN_PROBABILITY_SPAN_DAYS = 14;
+    private static final int MAX_LAST_RECORD_AGE_DAYS = 7;
+    private static final int MAX_PROBABILITY_HORIZON_DAYS = 56;
+    private static final int FORECAST_DRAWS = 4096;
+
     static final class Forecast {
         final ForecastStatus status;
         final int records;
         final long span;
         final double kgPerWeek;
         final LocalDate date;
+        final double probability;
 
         Forecast(ForecastStatus status, int records, long span, double kgPerWeek, LocalDate date) {
+            this(status, records, span, kgPerWeek, date, Double.NaN);
+        }
+
+        Forecast(ForecastStatus status, int records, long span, double kgPerWeek, LocalDate date, double probability) {
             this.status = status;
             this.records = records;
             this.span = span;
             this.kgPerWeek = kgPerWeek;
             this.date = date;
+            this.probability = probability;
         }
     }
 
@@ -274,7 +297,45 @@ final class Journal {
         if (estimated.isBefore(today)) {
             return new Forecast(ForecastStatus.NEEDS_UPDATE, count, span, weekly, null);
         }
-        return new Forecast(ForecastStatus.ESTIMATED, count, span, weekly, estimated);
+        double probability = Double.NaN;
+        if (count >= MIN_PROBABILITY_RECORDS && span >= MIN_PROBABILITY_SPAN_DAYS && !start.isBefore(recent)
+                && !latest.date.isBefore(today.minusDays(MAX_LAST_RECORD_AGE_DAYS))
+                && ChronoUnit.DAYS.between(today, estimated) <= MAX_PROBABILITY_HORIZON_DAYS) {
+            double squaredError = 0;
+            for (Weight weight : sample) {
+                double day = ChronoUnit.DAYS.between(start, weight.date) - meanDay;
+                double error = weight.value - (meanWeight + slope * day);
+                squaredError += error * error;
+            }
+            double from = ChronoUnit.DAYS.between(start, today) - meanDay;
+            double until = ChronoUnit.DAYS.between(start, estimated) - meanDay;
+            probability = probabilityByDate(count, squaredError, variance, meanWeight - target, slope, from, until);
+        }
+        return new Forecast(ForecastStatus.ESTIMATED, count, span, weekly, estimated, probability);
+    }
+
+    private static double probabilityByDate(int count, double squaredError, double daySumOfSquares,
+                                            double meanGap, double slope, double from, double until) {
+        if (squaredError <= 1e-12) return Double.NaN;
+        // Sample the fitted line's joint posterior under a Gaussian residual model with unknown variance.
+        // Centering the days makes the intercept and slope independent conditional on that variance.
+        Random random = new Random(0L);
+        double meanScale = 1.0 / Math.sqrt(count);
+        double slopeScale = 1.0 / Math.sqrt(daySumOfSquares);
+        int reached = 0;
+        for (int draw = 0; draw < FORECAST_DRAWS; draw++) {
+            double chiSquare = 0;
+            for (int degree = 0; degree < count - 2; degree++) {
+                double normal = random.nextGaussian();
+                chiSquare += normal * normal;
+            }
+            double residualScale = Math.sqrt(squaredError / chiSquare);
+            double sampledGap = meanGap + residualScale * meanScale * random.nextGaussian();
+            double sampledSlope = slope + residualScale * slopeScale * random.nextGaussian();
+            // A straight line reaches its minimum at one of the interval's endpoints.
+            if (sampledGap + sampledSlope * from <= 0 || sampledGap + sampledSlope * until <= 0) reached++;
+        }
+        return (double) reached / FORECAST_DRAWS;
     }
 
     private Journal() { }
