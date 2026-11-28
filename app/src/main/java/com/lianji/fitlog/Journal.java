@@ -48,17 +48,23 @@ final class Journal {
         final int days;
         final int minutes;
         final List<Exercise> exercises;
+        final boolean temporary;
 
         Plan(long id, String name, int days, int minutes, List<Exercise> exercises) {
+            this(id, name, days, minutes, exercises, false);
+        }
+
+        Plan(long id, String name, int days, int minutes, List<Exercise> exercises, boolean temporary) {
             this.id = id;
             this.name = name;
             this.days = days;
             this.minutes = minutes;
             this.exercises = exercises;
+            this.temporary = temporary;
         }
 
         boolean repeatsOn(LocalDate date) {
-            return (days & dayBit(date.getDayOfWeek())) != 0;
+            return !temporary && (days & dayBit(date.getDayOfWeek())) != 0;
         }
     }
 
@@ -86,11 +92,17 @@ final class Journal {
         final int exerciseIndex;
         final Integer reps;
         final Double loadKg;
+        final Long durationSeconds;
 
         SetLog(int exerciseIndex, Integer reps, Double loadKg) {
+            this(exerciseIndex, reps, loadKg, null);
+        }
+
+        SetLog(int exerciseIndex, Integer reps, Double loadKg, Long durationSeconds) {
             this.exerciseIndex = exerciseIndex;
             this.reps = reps;
             this.loadKg = loadKg;
+            this.durationSeconds = durationSeconds;
         }
     }
 
@@ -103,34 +115,65 @@ final class Journal {
         final int restSeconds;
         final long restUntil;
         final List<SetLog> sets;
+        final long setStartedAt;
+        final int activeExerciseIndex;
 
         WorkoutDraft(LocalDate date, Plan plan, long startedAt, int restSeconds, long restUntil, List<SetLog> sets) {
+            this(date, plan, startedAt, restSeconds, restUntil, sets, 0, 0);
+        }
+
+        WorkoutDraft(LocalDate date, Plan plan, long startedAt, int restSeconds, long restUntil, List<SetLog> sets,
+                     long setStartedAt, int activeExerciseIndex) {
             this.date = date;
             this.plan = plan;
             this.startedAt = startedAt;
             this.restSeconds = restSeconds;
             this.restUntil = restUntil;
             this.sets = sets;
+            this.setStartedAt = setStartedAt;
+            this.activeExerciseIndex = activeExerciseIndex;
         }
 
-        WorkoutDraft withSet(SetLog set, long now) {
+        boolean setRunning() {
+            return setStartedAt > 0;
+        }
+
+        boolean hasSetRemaining(int exerciseIndex) {
+            return exerciseIndex >= 0 && exerciseIndex < plan.exercises.size()
+                    && (plan.temporary || completedSets(exerciseIndex) < plan.exercises.get(exerciseIndex).sets);
+        }
+
+        WorkoutDraft startSet(int exerciseIndex, long now) {
+            if (setRunning() || !hasSetRemaining(exerciseIndex)) return this;
+            return new WorkoutDraft(date, plan, startedAt, restSeconds, 0, sets, now, exerciseIndex);
+        }
+
+        WorkoutDraft completeSet(Integer reps, Double loadKg, long now) {
+            if (!setRunning()) return this;
             List<SetLog> updated = new ArrayList<>(sets);
-            updated.add(set);
-            return new WorkoutDraft(date, plan, startedAt, restSeconds, now + restSeconds * 1000L, updated);
+            updated.add(new SetLog(activeExerciseIndex, reps, loadKg, setElapsedSeconds(now)));
+            return new WorkoutDraft(date, plan, startedAt, restSeconds, now + restSeconds * 1000L, updated,
+                    0, activeExerciseIndex);
         }
 
         WorkoutDraft undoSet() {
+            if (sets.isEmpty()) return this;
             List<SetLog> updated = new ArrayList<>(sets);
-            if (!updated.isEmpty()) updated.remove(updated.size() - 1);
-            return new WorkoutDraft(date, plan, startedAt, restSeconds, 0, updated);
+            SetLog removed = updated.remove(updated.size() - 1);
+            int exercise = setRunning() ? activeExerciseIndex : removed.exerciseIndex;
+            return new WorkoutDraft(date, plan, startedAt, restSeconds, 0, updated, setStartedAt, exercise);
         }
 
         WorkoutDraft withRest(int seconds, long until) {
-            return new WorkoutDraft(date, plan, startedAt, seconds, until, sets);
+            return new WorkoutDraft(date, plan, startedAt, seconds, until, sets, setStartedAt, activeExerciseIndex);
         }
 
         long elapsedSeconds(long now) {
             return Math.max(0, (now - startedAt) / 1000);
+        }
+
+        long setElapsedSeconds(long now) {
+            return setRunning() ? Math.max(0, (now - setStartedAt) / 1000) : 0;
         }
 
         int completedSets(int exerciseIndex) {
@@ -155,7 +198,9 @@ final class Journal {
         Week(LocalDate today, List<Plan> plans, List<Session> checkIns) {
             start = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
             for (int offset = 0; offset < 7; offset++) {
-                sessions.addAll(sessionsOn(start.plusDays(offset), plans, checkIns));
+                for (Session session : sessionsOn(start.plusDays(offset), plans, checkIns)) {
+                    if (!session.plan.temporary) sessions.add(session);
+                }
             }
         }
 

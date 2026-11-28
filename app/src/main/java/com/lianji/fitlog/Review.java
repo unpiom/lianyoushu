@@ -34,7 +34,6 @@ final class Review {
     private final Editors editors;
     private final LocalDate firstInstallDate;
     private LocalDate selected;
-    private View dayHeading;
 
     Review(MainActivity activity, Ui ui, Store store, Editors editors, LocalDate firstInstallDate, Bundle saved) {
         this.activity = activity;
@@ -60,8 +59,7 @@ final class Review {
         List<Journal.Session> history = store.checkIns(month.atDay(1), month.atEndOfMonth());
         ui.add(page, calendar(today, month, plans, history, drafts), 13);
 
-        dayHeading = ui.heading(DAY.format(selected) + "训练", 18);
-        ui.add(page, dayHeading, 17);
+        ui.add(page, ui.heading(DAY.format(selected) + "训练", 18), 17);
         List<Journal.Session> day = Journal.sessionsOn(selected, plans, history, drafts);
         day.sort(Comparator.comparing(session -> session.done));
         if (day.isEmpty()) {
@@ -183,10 +181,19 @@ final class Review {
         int fill = date.equals(today) ? BACKGROUND : WHITE;
         int color = future ? 0xff87978d : TEXT;
         String status = beforeInstall ? "安装前" : future ? "日期尚未到来" : "无训练安排";
-        if (!sessions.isEmpty()) {
-            int completed = 0;
-            for (Journal.Session session : sessions) if (session.done) completed++;
-            if (completed == sessions.size()) {
+        int planned = 0;
+        int completed = 0;
+        boolean hasTemporary = false;
+        for (Journal.Session session : sessions) {
+            if (session.plan.temporary) {
+                hasTemporary |= session.done;
+            } else {
+                planned++;
+                if (session.done) completed++;
+            }
+        }
+        if (planned > 0) {
+            if (completed == planned) {
                 fill = GREEN;
                 color = WHITE;
                 status = "训练计划全部完成";
@@ -199,6 +206,7 @@ final class Review {
                 status = "部分训练计划已完成";
             }
         }
+        if (hasTemporary) status += "，有临时训练记录";
 
         LinearLayout cell = ui.column();
         cell.setGravity(Gravity.CENTER);
@@ -213,14 +221,16 @@ final class Review {
                     selected = date;
                     activity.refresh();
                 }
-                activity.reveal(dayHeading);
             });
         }
         TextView number = ui.text(Integer.toString(date.getDayOfMonth()), 13, color, true);
         number.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
         cell.addView(number, new LinearLayout.LayoutParams(WRAP, WRAP));
         View selectionDot = new View(activity);
-        if (active) selectionDot.setBackground(ui.shape(color, 0, 4));
+        if (active || hasTemporary) {
+            int dot = active || fill == GREEN || fill == RED ? color : GREEN;
+            selectionDot.setBackground(ui.shape(dot, 0, 4));
+        }
         LinearLayout.LayoutParams spot = new LinearLayout.LayoutParams(ui.dp(5), ui.dp(5));
         spot.topMargin = ui.dp(1);
         cell.addView(selectionDot, spot);
@@ -235,7 +245,10 @@ final class Review {
 
     private View sessionCard(Journal.Session session) {
         LinearLayout card = ui.card();
-        ui.add(card, ui.heading(session.plan.name, 17), 0);
+        LinearLayout title = ui.row();
+        ui.weighted(title, ui.heading(session.plan.name, 17), 1, 0);
+        if (session.plan.temporary) title.addView(ui.pill("临时训练", TINT, GREEN));
+        ui.add(card, title, 0);
         String duration = session.durationSeconds == null ? "暂无时长记录" : Ui.duration(session.durationSeconds);
         String subtitle = session.sets.isEmpty() ? duration : duration + " · 完成 " + session.sets.size() + " 组";
         ui.add(card, ui.text(subtitle, 14, MUTED, false), 4);

@@ -2,7 +2,7 @@
 <resources>
     <string name="app_name">练有数</string>
     <string name="update_announcement_title">更新公告</string>
-    <string name="update_notes">1. 「训练 → 新建计划」新增「重置计划」。确认后用 4 个内置计划替换当前每周计划，保留打卡、训练草稿、体重和腰围记录。\n\n2. 「达标预测」将日期按钮改为「选择日期」，并调整预测范围提示。</string>
+    <string name="update_notes">1. 训练页直接显示今日训练。「新建计划」右上角可开始临时训练，保存过的名称可再次点选、改名或移除。「重置计划」位于每周计划底部。\n\n2. 计划训练和临时训练支持逐组计时。每组完成后自动开始休息倒计时，下一组手动开始。复盘可查看每组用时，点日期后月历停在当前位置。\n\n3. 可在训练页底部开启立体桌面悬浮球。闲置 10 秒或拖到屏幕侧边时自动收起，点露出的部分可打开训练菜单。\n\n4. 达标预测每日自动选中当前可选范围的最远日期。手动选择当天有效。</string>
     <string name="check_in_undo">撤销打卡</string>
     <string name="check_in_confirm">确认打卡</string>
     <string name="check_in_lock_hint">确认后无法撤销。</string>

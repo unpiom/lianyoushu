@@ -1,10 +1,14 @@
 package com.lianji.fitlog;
 
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
+import android.content.SharedPreferences;
 import android.content.res.Configuration;
-import android.graphics.Rect;
+import android.os.Build;
 import android.os.Bundle;
 import android.os.LocaleList;
 import android.text.TextUtils;
@@ -26,6 +30,8 @@ import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.temporal.TemporalAdjusters;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Locale;
 
@@ -34,7 +40,6 @@ import static com.lianji.fitlog.Ui.*;
 public final class MainActivity extends Activity {
     static final String[] DAYS = {"一", "二", "三", "四", "五", "六", "日"};
     static final DateTimeFormatter FULL_DATE = DateTimeFormatter.ofPattern("yyyy年M月d日", Locale.SIMPLIFIED_CHINESE);
-    private static final DateTimeFormatter SHORT_DATE = DateTimeFormatter.ofPattern("M/d", Locale.SIMPLIFIED_CHINESE);
     private static final DateTimeFormatter HEADER_DATE = DateTimeFormatter.ofPattern("M月d日", Locale.SIMPLIFIED_CHINESE);
     private static final DecimalFormat KG = new DecimalFormat("0.0#", DecimalFormatSymbols.getInstance(Locale.US));
     private static final int TODAY = 0;
@@ -42,8 +47,14 @@ public final class MainActivity extends Activity {
     private static final int TRAINING = 2;
     private static final int REVIEW = 3;
     private static final int WORKOUT_REQUEST = 42;
-    private static final int DEFAULT_FORECAST_DAYS = 28;
     private static final String FORECAST_DEADLINE = "forecast_deadline";
+    private static final String FORECAST_SELECTION_DAY = "forecast_selection_day";
+
+    private final BroadcastReceiver dateChanges = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            if (!LocalDate.now().equals(today)) refresh();
+        }
+    };
 
     private Ui ui;
     private Store store;
@@ -53,7 +64,6 @@ public final class MainActivity extends Activity {
     private Updates updates;
     private ScrollView scroll;
     private LocalDate today;
-    private LocalDate selectedDay;
     private List<Journal.Weight> weights;
     private List<Journal.Plan> plans;
     private List<Journal.WorkoutDraft> drafts;
@@ -64,6 +74,7 @@ public final class MainActivity extends Activity {
     private int tab = TODAY;
     private int historyLimit = 12;
     private boolean returning;
+    private String pendingDesktopAction;
 
     @Override protected void attachBaseContext(Context base) {
         Configuration config = new Configuration(base.getResources().getConfiguration());
@@ -82,23 +93,48 @@ public final class MainActivity extends Activity {
         int previousScroll = 0;
         if (state != null) {
             tab = state.getInt("tab", TODAY);
-            selectedDay = LocalDate.parse(state.getString("day", LocalDate.now().toString()));
             historyLimit = state.getInt("historyLimit", 12);
             previousScroll = state.getInt("scroll", 0);
         }
         Ui.configureWindow(getWindow());
+        pendingDesktopAction = DesktopBall.consumeAction(getIntent());
         render(previousScroll);
+    }
+
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        String action = DesktopBall.consumeAction(intent);
+        if (action != null) pendingDesktopAction = action;
+    }
+
+    @Override protected void onStart() {
+        super.onStart();
+        IntentFilter dates = new IntentFilter(Intent.ACTION_DATE_CHANGED);
+        dates.addAction(Intent.ACTION_TIME_CHANGED);
+        dates.addAction(Intent.ACTION_TIMEZONE_CHANGED);
+        if (Build.VERSION.SDK_INT >= 33) registerReceiver(dateChanges, dates, RECEIVER_NOT_EXPORTED);
+        else registerReceiver(dateChanges, dates);
     }
 
     @Override protected void onResume() {
         super.onResume();
+        DesktopBallService.hideForApp();
         if (returning || !LocalDate.now().equals(today)) refresh();
         returning = false;
     }
 
     @Override protected void onPostResume() {
         super.onPostResume();
-        updates.showNewVersionAnnouncement();
+        if (pendingDesktopAction == null) {
+            updates.showNewVersionAnnouncement();
+            return;
+        }
+        String action = pendingDesktopAction;
+        pendingDesktopAction = null;
+        tab = TRAINING;
+        render(0);
+        if (DesktopBall.TODAY_ACTION.equals(action)) openTodayWorkout();
+        else if (DesktopBall.TEMPORARY_ACTION.equals(action)) editors.openTemporaryWorkout();
     }
 
     @Override protected void onPause() {
@@ -106,9 +142,13 @@ public final class MainActivity extends Activity {
         super.onPause();
     }
 
+    @Override protected void onStop() {
+        unregisterReceiver(dateChanges);
+        super.onStop();
+    }
+
     @Override protected void onSaveInstanceState(Bundle state) {
         state.putInt("tab", tab);
-        state.putString("day", selectedDay.toString());
         state.putInt("historyLimit", historyLimit);
         state.putInt("scroll", scroll.getScrollY());
         review.save(state);
@@ -124,8 +164,10 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (DesktopBall.onSettingsResult(this, requestCode)) return;
         if (requestCode == WORKOUT_REQUEST && resultCode == RESULT_OK && data != null) {
-            trainingSaved(LocalDate.parse(data.getStringExtra(WorkoutActivity.DATE)));
+            trainingSaved(LocalDate.parse(data.getStringExtra(WorkoutActivity.DATE)),
+                    data.getBooleanExtra(WorkoutActivity.TEMPORARY, false));
         }
         if (requestCode == Updates.REQUEST_INSTALL_PERMISSION) updates.onInstallPermissionResult();
         planFiles.onActivityResult(requestCode, resultCode, data);
@@ -133,25 +175,6 @@ public final class MainActivity extends Activity {
 
     void refresh() {
         render(scroll.getScrollY());
-    }
-
-    void reveal(View view) {
-        ScrollView current = scroll;
-        Runnable scrollToView = () -> {
-            if (current != scroll) return;
-            Rect bounds = new Rect();
-            view.getDrawingRect(bounds);
-            current.offsetDescendantRectToMyCoords(view, bounds);
-            current.smoothScrollTo(0, bounds.top - ui.dp(6));
-        };
-        if (view.isLaidOut()) scrollToView.run();
-        else view.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
-            @Override public void onLayoutChange(View child, int left, int top, int right, int bottom,
-                                                 int oldLeft, int oldTop, int oldRight, int oldBottom) {
-                child.removeOnLayoutChangeListener(this);
-                current.post(scrollToView);
-            }
-        });
     }
 
     boolean write(Runnable action) {
@@ -174,10 +197,8 @@ public final class MainActivity extends Activity {
         plans = store.plans();
         drafts = store.drafts();
         LocalDate monday = today.with(TemporalAdjusters.previousOrSame(DayOfWeek.MONDAY));
-        week = new Journal.Week(today, plans, store.checkIns(monday, monday.plusDays(6)));
-        if (selectedDay == null || selectedDay.isBefore(monday) || selectedDay.isAfter(monday.plusDays(6))) {
-            selectedDay = today;
-        }
+        List<Journal.Session> checkIns = store.checkIns(monday, monday.plusDays(6));
+        week = new Journal.Week(today, plans, checkIns);
         weekAverage = Journal.average(Journal.between(weights, today.minusDays(6), today));
 
         LinearLayout root = ui.column();
@@ -198,13 +219,20 @@ public final class MainActivity extends Activity {
         navFrame.setBackgroundColor(WHITE);
         if (tab == TODAY) showToday(page);
         else if (tab == WEIGHT) showWeight(page);
-        else if (tab == TRAINING) showTraining(page);
+        else if (tab == TRAINING) showTraining(page, checkIns);
         else review.show(page, today, weights, plans, drafts);
 
         setContentView(root);
         root.requestApplyInsets();
-        ScrollView currentScroll = scroll;
-        if (previousScroll > 0) currentScroll.post(() -> currentScroll.scrollTo(0, previousScroll));
+        if (previousScroll > 0) {
+            scroll.addOnLayoutChangeListener(new View.OnLayoutChangeListener() {
+                @Override public void onLayoutChange(View view, int left, int top, int right, int bottom,
+                                                     int oldLeft, int oldTop, int oldRight, int oldBottom) {
+                    view.removeOnLayoutChangeListener(this);
+                    view.scrollTo(0, previousScroll);
+                }
+            });
+        }
     }
 
     private FrameLayout addCentered(LinearLayout parent, View child, int height, int marginTop) {
@@ -304,8 +332,7 @@ public final class MainActivity extends Activity {
         ui.add(hero, actions, 12);
         ui.add(page, hero, 0);
 
-        Journal.Forecast forecast = goal == null ? null
-                : Journal.forecast(weights, today, goal, preferredForecastDeadline(today));
+        Journal.Forecast forecast = goal == null ? null : forecastFor(today);
         ui.add(page, forecastCard(forecast), 13);
         ui.add(page, probabilityCard(forecast), 10);
         LinearLayout version = ui.row();
@@ -382,19 +409,29 @@ public final class MainActivity extends Activity {
         return card;
     }
 
-    private LocalDate preferredForecastDeadline(LocalDate asOf) {
-        LocalDate defaultDate = asOf.plusDays(DEFAULT_FORECAST_DAYS);
-        long saved = getPreferences(MODE_PRIVATE).getLong(FORECAST_DEADLINE, defaultDate.toEpochDay());
-        long days = saved - asOf.toEpochDay();
-        return days >= 0 && days <= Journal.MAX_FORECAST_DAYS ? LocalDate.ofEpochDay(saved) : defaultDate;
+    private Journal.Forecast forecastFor(LocalDate asOf) {
+        LocalDate deadline = preferredForecastDeadline(asOf, getPreferences(MODE_PRIVATE));
+        return Journal.forecast(weights, asOf, goal, deadline);
+    }
+
+    private static LocalDate preferredForecastDeadline(LocalDate asOf, SharedPreferences preferences) {
+        long day = asOf.toEpochDay();
+        long furthest = day + Journal.MAX_FORECAST_DAYS;
+        long saved = preferences.getLong(FORECAST_DEADLINE, furthest);
+        if (preferences.getLong(FORECAST_SELECTION_DAY, Long.MIN_VALUE) == day && saved >= day && saved <= furthest) {
+            return LocalDate.ofEpochDay(saved);
+        }
+        return LocalDate.ofEpochDay(furthest);
     }
 
     private void pickForecastDeadline(Journal.Forecast displayed) {
         LocalDate now = LocalDate.now();
-        Journal.Forecast forecast = now.equals(today) ? displayed
-                : Journal.forecast(weights, now, goal, preferredForecastDeadline(now));
+        Journal.Forecast forecast = now.equals(today) ? displayed : forecastFor(now);
         editors.pickDate(forecast.deadline, now, now.plusDays(forecast.maxDays), deadline -> {
-            getPreferences(MODE_PRIVATE).edit().putLong(FORECAST_DEADLINE, deadline.toEpochDay()).apply();
+            getPreferences(MODE_PRIVATE).edit()
+                    .putLong(FORECAST_DEADLINE, deadline.toEpochDay())
+                    .putLong(FORECAST_SELECTION_DAY, LocalDate.now().toEpochDay())
+                    .apply();
             refresh();
         });
     }
@@ -495,42 +532,30 @@ public final class MainActivity extends Activity {
         ui.editNumber(label, "编辑体重", canEdit(weight) ? () -> editors.editWeight(weight.date) : null);
     }
 
-    private void showTraining(LinearLayout page) {
-        LinearLayout overview = ui.card();
-        showProgress(overview, "本周进度");
-        ui.add(overview, ui.text(SHORT_DATE.format(week.start) + "—" + SHORT_DATE.format(week.start.plusDays(6)),
-                12, MUTED, false), 9);
-        LinearLayout days = ui.row();
-        for (int i = 0; i < 7; i++) {
-            LocalDate date = week.start.plusDays(i);
-            ui.weighted(days, dayButton(date, week.on(date)), 1, i == 0 ? 0 : 3);
-        }
-        ui.add(overview, days, 7);
-        ui.add(page, overview, 0);
-
-        for (Journal.WorkoutDraft draft : drafts) {
-            boolean listed = false;
-            for (Journal.Session session : week.on(selectedDay)) {
-                if (session.date.equals(draft.date) && session.plan.id == draft.plan.id) listed = true;
-            }
-            if (!listed) {
-                LinearLayout pending = ui.card();
-                ui.add(pending, ui.heading(draft.plan.name, 16), 0);
-                ui.add(pending, ui.text(FULL_DATE.format(draft.date) + " · 训练草稿", 13, MUTED, false), 3);
-                ui.add(pending, ui.secondary("继续训练", () -> openWorkout(draft.date, draft.plan.id)), 7);
-                ui.add(page, pending, 8);
-            }
-        }
-
-        String dayTitle = selectedDay.equals(today) ? "今日训练" : weekday(selectedDay) + "训练 · " + SHORT_DATE.format(selectedDay);
-        ui.add(page, ui.heading(dayTitle, 18), 18);
-        List<Journal.Session> sessions = week.on(selectedDay);
+    private void showTraining(LinearLayout page, List<Journal.Session> checkIns) {
+        List<Journal.Session> sessions = Journal.sessionsOn(today, plans, checkIns, drafts);
+        sessions.sort(Comparator.comparing(session -> session.plan.temporary));
+        ui.add(page, ui.heading("今日训练", 18), 0);
         if (sessions.isEmpty()) {
             LinearLayout empty = ui.card();
-            ui.add(empty, ui.text("这天没有训练安排。", 14, MUTED, false), 0);
+            ui.add(empty, ui.text("今天没有训练安排。", 14, MUTED, false), 0);
             ui.add(page, empty, 8);
         }
         for (Journal.Session session : sessions) ui.add(page, trainingCard(session), 8);
+
+        boolean draftHeadingShown = false;
+        for (Journal.WorkoutDraft draft : drafts) {
+            if (draft.date.equals(today)) continue;
+            if (!draftHeadingShown) {
+                ui.add(page, ui.heading("训练草稿", 18), 18);
+                draftHeadingShown = true;
+            }
+            LinearLayout pending = ui.card();
+            ui.add(pending, ui.heading(draft.plan.name, 16), 0);
+            if (draft.plan.temporary) ui.add(pending, ui.text("临时训练", 13, MUTED, false), 3);
+            ui.add(pending, ui.secondary("继续训练", () -> openWorkout(draft.date, draft.plan.id)), 7);
+            ui.add(page, pending, 8);
+        }
 
         ui.add(page, ui.heading("每周计划", 18), 18);
         LinearLayout files = ui.row();
@@ -556,49 +581,11 @@ public final class MainActivity extends Activity {
             ui.add(rules, row, plan == plans.get(0) ? 0 : 8);
         }
         ui.add(page, rules, 8);
-    }
-
-    private View dayButton(LocalDate date, List<Journal.Session> sessions) {
-        boolean active = date.equals(selectedDay);
-        boolean allDone = !sessions.isEmpty();
-        for (Journal.Session session : sessions) allDone &= session.done;
-        LinearLayout day = ui.column();
-        day.setGravity(Gravity.CENTER);
-        day.setMinimumHeight(ui.dp(63));
-        day.setBackground(ui.ripple(active ? FOREST : (date.equals(today) ? TINT : BACKGROUND), 0, 11));
-        day.setSelected(active);
-        day.setFocusable(true);
-        day.setContentDescription(weekday(date) + " " + HEADER_DATE.format(date) + "，"
-                + (sessions.isEmpty() ? "无安排" : allDone ? "训练已完成" : "有训练安排"));
-        day.setOnClickListener(view -> {
-            if (!date.equals(selectedDay)) {
-                selectedDay = date;
-                refresh();
-            }
-        });
-        TextView name = ui.text(DAYS[date.getDayOfWeek().getValue() - 1], 12, active ? PALE : MUTED, false);
-        TextView number = ui.text(Integer.toString(date.getDayOfMonth()), 16, active ? WHITE : TEXT, true);
-        name.setGravity(Gravity.CENTER);
-        number.setGravity(Gravity.CENTER);
-        name.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        number.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
-        day.addView(name);
-        day.addView(number);
-        View dot = new View(this);
-        int dotColor = sessions.isEmpty() ? 0 : allDone ? (active ? LIME : GREEN) : (active ? PALE : 0xff799b86);
-        dot.setBackground(ui.shape(dotColor, 0, 4));
-        LinearLayout.LayoutParams dotParams = new LinearLayout.LayoutParams(ui.dp(5), ui.dp(5));
-        dotParams.topMargin = ui.dp(3);
-        day.addView(dot, dotParams);
-        return day;
-    }
-
-    private void showProgress(LinearLayout card, String title) {
-        LinearLayout row = ui.row();
-        ui.weighted(row, ui.heading(title, 18), 1, 0);
-        row.addView(ui.pill(week.completed() + " / " + week.sessions.size() + " 次", TINT, GREEN));
-        ui.add(card, row, 0);
-        ui.progress(card, week.completed(), week.sessions.size(), 10);
+        LinearLayout settings = ui.row();
+        settings.addView(ui.secondary("桌面悬浮球", () -> DesktopBall.showSettings(this)));
+        ui.spacer(settings);
+        settings.addView(ui.button("重置计划", WHITE, RED, LINE, editors::resetPlans));
+        ui.add(page, settings, 9);
     }
 
     View trainingCard(Journal.Session session) {
@@ -612,6 +599,7 @@ public final class MainActivity extends Activity {
             }
         }
         Journal.Plan plan = draft == null ? session.plan : draft.plan;
+        if (plan.temporary) return temporaryTrainingCard(session, draft);
         boolean planEditable = !session.done && draft == null;
         boolean future = session.date.isAfter(today);
         LinearLayout card = ui.card();
@@ -655,9 +643,58 @@ public final class MainActivity extends Activity {
         return card;
     }
 
+    private View temporaryTrainingCard(Journal.Session session, Journal.WorkoutDraft draft) {
+        LinearLayout card = ui.card();
+        LinearLayout title = ui.row();
+        ui.weighted(title, ui.heading(session.plan.name, 16), 1, 0);
+        title.addView(ui.pill("临时训练", TINT, GREEN));
+        ui.add(card, title, 0);
+        int count = draft == null ? session.sets.size() : draft.sets.size();
+        String summary = "已完成 " + count + " 组";
+        if (session.durationSeconds != null) summary += " · " + Ui.duration(session.durationSeconds);
+        ui.add(card, ui.text(summary, 13, MUTED, false), 4);
+        if (draft != null) {
+            ui.add(card, ui.primary("继续训练", () -> openWorkout(draft.date, draft.plan.id)), 10);
+        }
+        return card;
+    }
+
+    private void openTodayWorkout() {
+        for (Journal.WorkoutDraft draft : drafts) {
+            if (draft.date.equals(today) && !draft.plan.temporary) {
+                openWorkout(draft.date, draft.plan.id);
+                return;
+            }
+        }
+        List<Journal.Session> scheduled = week.on(today);
+        List<Journal.Session> available = new ArrayList<>();
+        for (Journal.Session session : scheduled) {
+            if (!session.done) available.add(session);
+        }
+        if (available.size() == 1) {
+            startWorkout(available.get(0));
+        } else if (available.isEmpty()) {
+            new AlertDialog.Builder(this).setTitle("今日训练")
+                    .setMessage(scheduled.isEmpty() ? "今天没有训练安排。" : "今天的训练计划已完成。")
+                    .setPositiveButton("临时训练", (dialog, which) -> editors.openTemporaryWorkout())
+                    .setNegativeButton("关闭", null).show();
+        } else {
+            String[] choices = available.stream().map(session -> session.plan.name + " · " + session.plan.minutes + " 分钟")
+                    .toArray(String[]::new);
+            new AlertDialog.Builder(this).setTitle("选择今日训练")
+                    .setItems(choices, (dialog, which) -> startWorkout(available.get(which)))
+                    .setNegativeButton("取消", null).show();
+        }
+    }
+
     private void startWorkout(Journal.Session session) {
         if (!session.date.equals(LocalDate.now()) || !write(() -> store.startWorkout(session))) return;
         openWorkout(session.date, session.plan.id);
+    }
+
+    boolean startTemporaryWorkout(String name) {
+        LocalDate date = LocalDate.now();
+        return write(() -> openWorkout(date, store.startTemporaryWorkout(date, name)));
     }
 
     private void openWorkout(LocalDate date, long planId) {
@@ -667,8 +704,12 @@ public final class MainActivity extends Activity {
     }
 
     void trainingSaved(LocalDate date) {
+        trainingSaved(date, false);
+    }
+
+    private void trainingSaved(LocalDate date, boolean temporary) {
         refresh();
-        editors.showCompleted(date, week);
+        editors.showCompleted(date, week, temporary);
     }
 
     static String kg(double value) {

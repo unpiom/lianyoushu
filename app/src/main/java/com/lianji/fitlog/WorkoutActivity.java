@@ -32,6 +32,7 @@ import static com.lianji.fitlog.Ui.*;
 public final class WorkoutActivity extends Activity {
     static final String DATE = "workout_date";
     static final String PLAN = "workout_plan";
+    static final String TEMPORARY = "workout_temporary";
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable tick = new Runnable() {
         @Override public void run() {
@@ -45,7 +46,7 @@ public final class WorkoutActivity extends Activity {
     private int exerciseIndex;
     private LinearLayout exerciseCard;
     private TextView elapsed;
-    private TextView restClock;
+    private TextView groupClock;
     private Button skip;
     private ScrollView scroll;
 
@@ -58,7 +59,11 @@ public final class WorkoutActivity extends Activity {
             finish();
             return;
         }
-        exerciseIndex = state == null ? firstIncomplete() : state.getInt("exercise");
+        exerciseIndex = defaultExercise(draft);
+        if (!draft.setRunning() && state != null) {
+            int savedExercise = state.getInt("exercise", exerciseIndex);
+            if (savedExercise >= 0 && savedExercise < draft.plan.exercises.size()) exerciseIndex = savedExercise;
+        }
         ui = new Ui(this);
         Ui.configureWindow(getWindow());
         render(0);
@@ -66,7 +71,22 @@ public final class WorkoutActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (draft != null) handler.post(tick);
+        DesktopBallService.hideForApp();
+        if (draft == null) return;
+        Journal.WorkoutDraft latest = store.draft(draft.date, draft.plan.id);
+        if (latest == null) {
+            finish();
+            return;
+        }
+        boolean timerChanged = latest.setStartedAt != draft.setStartedAt || latest.activeExerciseIndex != draft.activeExerciseIndex
+                || latest.restUntil != draft.restUntil || latest.restSeconds != draft.restSeconds
+                || latest.sets.size() != draft.sets.size();
+        draft = latest;
+        if (timerChanged) {
+            exerciseIndex = defaultExercise(draft);
+            render(scroll.getScrollY());
+        }
+        handler.post(tick);
     }
 
     @Override protected void onPause() {
@@ -84,11 +104,17 @@ public final class WorkoutActivity extends Activity {
         super.onDestroy();
     }
 
-    private int firstIncomplete() {
+    private static int firstIncomplete(Journal.WorkoutDraft draft) {
         for (int i = 0; i < draft.plan.exercises.size(); i++) {
-            if (draft.completedSets(i) < draft.plan.exercises.get(i).sets) return i;
+            if (draft.hasSetRemaining(i)) return i;
         }
-        return 0;
+        return -1;
+    }
+
+    private static int defaultExercise(Journal.WorkoutDraft draft) {
+        if (draft.setRunning() || draft.hasSetRemaining(draft.activeExerciseIndex)) return draft.activeExerciseIndex;
+        int next = firstIncomplete(draft);
+        return next < 0 ? draft.activeExerciseIndex : next;
     }
 
     private void render(int position) {
@@ -115,7 +141,7 @@ public final class WorkoutActivity extends Activity {
         root.addView(scroll, new LinearLayout.LayoutParams(MATCH, 0, 1));
 
         ui.add(page, progressCard(), 0);
-        ui.add(page, restCard(), 12);
+        ui.add(page, groupClockCard(), 12);
         exerciseCard = ui.card();
         ui.add(page, exerciseCard, 12);
         showExercise();
@@ -125,7 +151,7 @@ public final class WorkoutActivity extends Activity {
         ui.divider(root, 0);
         LinearLayout footer = ui.constrainedColumn();
         ui.padding(footer, 20, 8, 20, 8);
-        ui.add(footer, ui.primary("结束并打卡", this::confirmFinish), 0);
+        ui.add(footer, ui.primary(draft.plan.temporary ? "结束并保存" : "结束并打卡", this::confirmFinish), 0);
         center(root, footer).setBackgroundColor(WHITE);
         setContentView(root);
         root.requestApplyInsets();
@@ -147,9 +173,12 @@ public final class WorkoutActivity extends Activity {
         card.setBackground(ui.shape(FOREST, 0, 21));
         ui.padding(card, 16, 15, 16, 15);
         ui.add(card, ui.text(draft.plan.name, 22, WHITE, true), 0);
-        ui.add(card, ui.text(MainActivity.FULL_DATE.format(draft.date) + " · " + draft.plan.minutes + " 分钟计划", 13, PALE, false), 4);
+        String type = draft.plan.temporary ? "临时训练" : draft.plan.minutes + " 分钟计划";
+        ui.add(card, ui.text(MainActivity.FULL_DATE.format(draft.date) + " · " + type, 13, PALE, false), 4);
         LinearLayout timing = ui.row();
-        ui.weighted(timing, ui.text("已完成 " + draft.sets.size() + " / " + draft.plannedSets() + " 组", 15, LIME, true), 1, 0);
+        String sets = Integer.toString(draft.sets.size());
+        if (!draft.plan.temporary) sets += " / " + draft.plannedSets();
+        ui.weighted(timing, ui.text("已完成 " + sets + " 组", 15, LIME, true), 1, 0);
         elapsed = ui.text("", 19, WHITE, true);
         elapsed.setContentDescription("训练用时");
         timing.addView(elapsed);
@@ -157,30 +186,40 @@ public final class WorkoutActivity extends Activity {
         return card;
     }
 
-    private View restCard() {
+    private View groupClockCard() {
         LinearLayout card = ui.card();
         LinearLayout row = ui.row();
         LinearLayout label = ui.column();
-        ui.add(label, ui.heading("组间休息", 17), 0);
-        TextView duration = ui.text("每组 " + draft.restSeconds + " 秒", 14, GREEN, true);
-        ui.editNumber(duration, "编辑组间休息时长", this::chooseRest);
-        ui.add(label, duration, 3);
+        ui.add(label, ui.heading(draft.setRunning() ? "本组用时" : "组间休息", 17), 0);
+        if (!draft.setRunning()) {
+            TextView duration = ui.text("每组 " + draft.restSeconds + " 秒", 14, GREEN, true);
+            ui.editNumber(duration, "编辑组间休息时长", this::chooseRest);
+            ui.add(label, duration, 3);
+        }
         ui.weighted(row, label, 1, 0);
-        restClock = ui.text("", 26, GREEN, true);
-        row.addView(restClock);
+        groupClock = ui.text("", 26, GREEN, true);
+        row.addView(groupClock);
         ui.add(card, row, 0);
-        skip = ui.secondary("跳过休息", () -> save(draft.withRest(draft.restSeconds, 0)));
-        ui.add(card, skip, 8);
+        if (!draft.setRunning() && draft.restUntil > 0) {
+            skip = ui.secondary("跳过休息", () -> save(draft.withRest(draft.restSeconds, 0)));
+            ui.add(card, skip, 8);
+        } else {
+            skip = null;
+        }
         return card;
     }
 
     private void updateClocks() {
         long now = System.currentTimeMillis();
         setText(elapsed, Ui.clock(draft.elapsedSeconds(now)));
+        if (draft.setRunning()) {
+            setText(groupClock, Ui.clock(draft.setElapsedSeconds(now)));
+            return;
+        }
         long seconds = Math.max(0, (draft.restUntil - now + 999) / 1000);
-        setText(restClock, seconds > 0 ? Ui.clock(seconds) : draft.restUntil == 0 ? "待开始" : "休息结束");
+        setText(groupClock, seconds > 0 ? Ui.clock(seconds) : draft.restUntil == 0 ? "待开始" : "休息结束");
         boolean active = seconds > 0;
-        if (skip.isEnabled() != active) {
+        if (skip != null && skip.isEnabled() != active) {
             skip.setEnabled(active);
             skip.setAlpha(active ? 1f : 0.44f);
         }
@@ -207,12 +246,17 @@ public final class WorkoutActivity extends Activity {
 
     private void showExercise() {
         exerciseCard.removeAllViews();
+        if (draft.plan.exercises.isEmpty()) {
+            ui.add(exerciseCard, ui.text("这项训练没有安排动作。", 14, MUTED, false), 0);
+            return;
+        }
         if (draft.plan.exercises.size() > 1) addMovementSelector();
         Journal.Exercise exercise = draft.plan.exercises.get(exerciseIndex);
         int completed = draft.completedSets(exerciseIndex);
         LinearLayout heading = ui.row();
         ui.weighted(heading, ui.heading(exercise.name, 19), 1, 0);
-        heading.addView(ui.pill(completed + " / " + exercise.sets + " 组", TINT, GREEN));
+        String groups = draft.plan.temporary ? completed + " 组" : completed + " / " + exercise.sets + " 组";
+        heading.addView(ui.pill(groups, TINT, GREEN));
         ui.add(exerciseCard, heading, draft.plan.exercises.size() > 1 ? 9 : 0);
 
         List<Journal.SetLog> previous = store.previousSets(exercise.name, draft.date);
@@ -220,10 +264,10 @@ public final class WorkoutActivity extends Activity {
             int next = Math.min(completed, previous.size() - 1);
             ui.add(exerciseCard, ui.text("上次第 " + (next + 1) + " 组  " + setSummary(previous.get(next)), 14, MUTED, false), 7);
         }
-        if (completed >= exercise.sets) {
+        if (!draft.hasSetRemaining(exerciseIndex)) {
             ui.add(exerciseCard, ui.text("该动作已完成。", 14, GREEN, true), 9);
-            int pending = firstIncomplete();
-            if (draft.sets.size() < draft.plannedSets()) {
+            int pending = firstIncomplete(draft);
+            if (pending >= 0) {
                 ui.add(exerciseCard, ui.primary("下一动作", () -> {
                     exerciseIndex = pending;
                     showExercise();
@@ -231,7 +275,13 @@ public final class WorkoutActivity extends Activity {
             }
             return;
         }
-        addSetInput(completed + 1);
+        ui.add(exerciseCard, ui.text("第 " + (completed + 1) + " 组", 14, TEXT, true), 9);
+        if (draft.setRunning()) {
+            addSetInput();
+        } else {
+            String startLabel = draft.sets.isEmpty() ? "开始第一组" : "开始下一组";
+            ui.add(exerciseCard, ui.primary(startLabel, () -> save(draft.startSet(exerciseIndex, System.currentTimeMillis()))), 10);
+        }
     }
 
     private void addMovementSelector() {
@@ -247,9 +297,10 @@ public final class WorkoutActivity extends Activity {
         values.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         movement.setAdapter(values);
         movement.setSelection(exerciseIndex);
+        movement.setEnabled(!draft.setRunning());
         movement.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             @Override public void onItemSelected(AdapterView<?> view, View item, int position, long id) {
-                if (exerciseIndex != position) {
+                if (!draft.setRunning() && movement.getParent() == exerciseCard && exerciseIndex != position) {
                     exerciseIndex = position;
                     showExercise();
                 }
@@ -259,7 +310,7 @@ public final class WorkoutActivity extends Activity {
         ui.add(exerciseCard, movement, 0);
     }
 
-    private void addSetInput(int setNumber) {
+    private void addSetInput() {
         int numeric = InputType.TYPE_CLASS_NUMBER;
         LinearLayout inputs = ui.row();
         EditText reps = numberField("次数", numeric, 4);
@@ -271,7 +322,8 @@ public final class WorkoutActivity extends Activity {
         TextView error = ui.text("", 13, RED, false);
         error.setVisibility(View.GONE);
         ui.add(exerciseCard, error, 5);
-        ui.add(exerciseCard, ui.primary("完成第 " + setNumber + " 组", () -> {
+        ui.add(exerciseCard, ui.primary("完成本组", () -> {
+            long completedAt = System.currentTimeMillis();
             String repsText = reps.getText().toString().trim();
             String loadText = load.getText().toString().trim().replace(',', '.');
             Integer performed = repsText.isEmpty() ? null : Editors.integer(reps, 9999);
@@ -283,7 +335,8 @@ public final class WorkoutActivity extends Activity {
             }
             Double kg = loadText.isEmpty() ? null : Double.valueOf(loadText);
             hideKeyboard();
-            save(draft.withSet(new Journal.SetLog(exerciseIndex, performed, kg), System.currentTimeMillis()));
+            Journal.WorkoutDraft completed = draft.completeSet(performed, kg, completedAt);
+            save(completed, defaultExercise(completed));
         }), 10);
     }
 
@@ -302,16 +355,21 @@ public final class WorkoutActivity extends Activity {
     }
 
     private boolean save(Journal.WorkoutDraft update) {
+        return save(update, exerciseIndex);
+    }
+
+    private boolean save(Journal.WorkoutDraft update, int selection) {
+        if (update == draft) return true;
         if (!write(() -> store.saveDraft(update))) return false;
         draft = update;
+        exerciseIndex = selection;
         render(scroll.getScrollY());
         return true;
     }
 
     private void undoSet() {
-        if (draft.sets.isEmpty()) return;
-        exerciseIndex = draft.sets.get(draft.sets.size() - 1).exerciseIndex;
-        save(draft.undoSet());
+        Journal.WorkoutDraft undone = draft.undoSet();
+        save(undone, defaultExercise(undone));
     }
 
     private void confirmDiscard() {
@@ -322,17 +380,21 @@ public final class WorkoutActivity extends Activity {
     }
 
     private void confirmFinish() {
-        hideKeyboard();
         long measured = draft.elapsedSeconds(System.currentTimeMillis());
+        hideKeyboard();
         LinearLayout body = ui.column();
         body.setFocusableInTouchMode(true);
         ui.padding(body, 22, 11, 22, 4);
         ui.add(body, ui.text("完成 " + draft.sets.size() + " 组 · 计时 " + Ui.duration(measured), 15, TEXT, true), 0);
+        if (draft.setRunning()) {
+            ui.add(body, ui.text("当前组仍在计时。可以返回完成本组，或保存已完成的组。", 14, MUTED, false), 7);
+        }
         ui.add(body, ui.text("可填入实际训练分钟数来调整计时。", 14, MUTED, false), 7);
         EditText adjusted = numberField("实际时长（分钟，可选）", InputType.TYPE_CLASS_NUMBER, 4);
         ui.add(body, adjusted, 9);
         ui.add(body, ui.text(getString(R.string.check_in_lock_hint), 14, MUTED, false), 9);
-        AlertDialog dialog = new AlertDialog.Builder(this).setTitle("确认训练打卡").setView(body)
+        String title = draft.plan.temporary ? "确认保存临时训练" : "确认训练打卡";
+        AlertDialog dialog = new AlertDialog.Builder(this).setTitle(title).setView(body)
                 .setNegativeButton(R.string.check_in_undo, null).setPositiveButton(R.string.check_in_confirm, null).create();
         dialog.show();
         body.requestFocus();
@@ -350,7 +412,7 @@ public final class WorkoutActivity extends Activity {
             long duration = seconds;
             if (!write(() -> store.finishWorkout(draft, duration))) return;
             dialog.dismiss();
-            setResult(RESULT_OK, new Intent().putExtra(DATE, draft.date.toString()));
+            setResult(RESULT_OK, new Intent().putExtra(DATE, draft.date.toString()).putExtra(TEMPORARY, draft.plan.temporary));
             finish();
         });
     }
@@ -373,9 +435,9 @@ public final class WorkoutActivity extends Activity {
     }
 
     static String setSummary(Journal.SetLog set) {
-        if (set.reps == null && set.loadKg == null) return "已完成";
-        if (set.reps == null) return MainActivity.kg(set.loadKg) + " kg";
-        if (set.loadKg == null) return set.reps + " 次";
-        return set.reps + " 次 · " + MainActivity.kg(set.loadKg) + " kg";
+        StringBuilder summary = new StringBuilder();
+        if (set.reps != null) summary.append(set.reps).append(" 次 · ");
+        if (set.loadKg != null) summary.append(MainActivity.kg(set.loadKg)).append(" kg · ");
+        return summary.append(set.durationSeconds == null ? "未计时" : "用时 " + Ui.duration(set.durationSeconds)).toString();
     }
 }

@@ -15,15 +15,19 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.time.LocalDate;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 
 final class Store extends SQLiteOpenHelper {
+    private static final String CHECK_IN_COLUMNS = "day, plan_id, name, days, minutes, exercises, duration_seconds, set_logs";
+    private static final String DRAFT_COLUMNS = "day, plan_id, name, days, minutes, exercises, started_at, "
+            + "rest_seconds, rest_until, set_logs, set_started_at, active_exercise_index";
     private final Context context;
 
     Store(Context context) {
-        super(context, new File(context.getNoBackupFilesDir(), "journal.db").getAbsolutePath(), null, 5);
+        super(context, new File(context.getNoBackupFilesDir(), "journal.db").getAbsolutePath(), null, 6);
         this.context = context.getApplicationContext();
     }
 
@@ -37,6 +41,7 @@ final class Store extends SQLiteOpenHelper {
                 + "finished_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (day, plan_id))");
         db.execSQL("CREATE TABLE goal (id INTEGER PRIMARY KEY CHECK (id = 1), kg REAL NOT NULL)");
         createActivityTables(db);
+        addWorkoutTiming(db);
         for (Journal.Plan plan : defaultPlans()) {
             db.insertOrThrow("plans", null, planValues(plan));
         }
@@ -61,6 +66,15 @@ final class Store extends SQLiteOpenHelper {
             createActivityTables(db);
         }
         if (oldVersion < 5) removeLegacyStepData(db);
+        if (oldVersion < 6) addWorkoutTiming(db);
+    }
+
+    private void addWorkoutTiming(SQLiteDatabase db) {
+        db.execSQL("ALTER TABLE workout_drafts ADD COLUMN set_started_at INTEGER NOT NULL DEFAULT 0");
+        db.execSQL("ALTER TABLE workout_drafts ADD COLUMN active_exercise_index INTEGER NOT NULL DEFAULT 0");
+        db.execSQL("CREATE TABLE temporary_names (name TEXT PRIMARY KEY NOT NULL COLLATE NOCASE, last_used INTEGER NOT NULL)");
+        db.execSQL("CREATE TABLE temporary_workout_counter (next_id INTEGER NOT NULL)");
+        db.execSQL("INSERT INTO temporary_workout_counter (next_id) VALUES (-1)");
     }
 
     private void removeLegacyStepData(SQLiteDatabase db) {
@@ -247,8 +261,7 @@ final class Store extends SQLiteOpenHelper {
     List<Journal.Session> checkIns(LocalDate start, LocalDate end) {
         List<Journal.Session> result = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT day, plan_id, name, days, minutes, exercises, duration_seconds, set_logs FROM check_ins "
-                        + "WHERE day BETWEEN ? AND ? ORDER BY day, plan_id",
+                "SELECT " + CHECK_IN_COLUMNS + " FROM check_ins WHERE day BETWEEN ? AND ? ORDER BY day, plan_id",
                 new String[]{start.toString(), end.toString()})) {
             while (cursor.moveToNext()) {
                 result.add(readCheckIn(cursor));
@@ -281,8 +294,7 @@ final class Store extends SQLiteOpenHelper {
 
     Journal.WorkoutDraft draft(LocalDate date, long planId) {
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT day, plan_id, name, days, minutes, exercises, started_at, rest_seconds, rest_until, set_logs "
-                        + "FROM workout_drafts WHERE day = ? AND plan_id = ?", workoutKey(date, planId))) {
+                "SELECT " + DRAFT_COLUMNS + " FROM workout_drafts WHERE day = ? AND plan_id = ?", workoutKey(date, planId))) {
             return cursor.moveToFirst() ? readDraft(cursor) : null;
         }
     }
@@ -290,8 +302,7 @@ final class Store extends SQLiteOpenHelper {
     List<Journal.WorkoutDraft> drafts() {
         List<Journal.WorkoutDraft> result = new ArrayList<>();
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT day, plan_id, name, days, minutes, exercises, started_at, rest_seconds, rest_until, set_logs "
-                        + "FROM workout_drafts ORDER BY started_at DESC", null)) {
+                "SELECT " + DRAFT_COLUMNS + " FROM workout_drafts ORDER BY started_at DESC", null)) {
             while (cursor.moveToNext()) result.add(readDraft(cursor));
         }
         return result;
@@ -313,13 +324,85 @@ final class Store extends SQLiteOpenHelper {
                 if (existing.moveToFirst()) throw new IllegalStateException("Workout completed");
             }
             if (!hasDraft(session.date, session.plan.id)) {
-                Journal.WorkoutDraft draft = new Journal.WorkoutDraft(session.date, session.plan, System.currentTimeMillis(),
-                        Journal.WorkoutDraft.DEFAULT_REST_SECONDS, 0, new ArrayList<>());
-                db.insertOrThrow("workout_drafts", null, draftValues(draft));
+                insertDraft(db, session.date, session.plan);
             }
             db.setTransactionSuccessful();
         } finally {
             db.endTransaction();
+        }
+    }
+
+    long startTemporaryWorkout(LocalDate date, String input) {
+        String name = input.trim();
+        if (name.isEmpty()) throw new IllegalArgumentException("Training name is empty");
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            // Weekly plans use positive IDs. Each temporary workout gets its own negative ID.
+            long id;
+            try (Cursor cursor = db.rawQuery("SELECT next_id FROM temporary_workout_counter", null)) {
+                if (!cursor.moveToFirst()) throw new IllegalStateException("Missing temporary workout counter");
+                id = cursor.getLong(0);
+            }
+            db.execSQL("UPDATE temporary_workout_counter SET next_id = next_id - 1");
+            Journal.Plan plan = new Journal.Plan(id, name, 0, 0,
+                    Collections.singletonList(new Journal.Exercise(name, 1)), true);
+            insertDraft(db, date, plan);
+            db.setTransactionSuccessful();
+            return id;
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    private void insertDraft(SQLiteDatabase db, LocalDate date, Journal.Plan plan) {
+        long now = System.currentTimeMillis();
+        long setStartedAt = plan.exercises.isEmpty() ? 0 : now;
+        Journal.WorkoutDraft draft = new Journal.WorkoutDraft(date, plan, now, Journal.WorkoutDraft.DEFAULT_REST_SECONDS,
+                0, Collections.emptyList(), setStartedAt, 0);
+        db.insertOrThrow("workout_drafts", null, draftValues(draft));
+    }
+
+    List<String> temporaryNames() {
+        List<String> names = new ArrayList<>();
+        try (Cursor cursor = getReadableDatabase().rawQuery(
+                "SELECT name FROM temporary_names ORDER BY last_used DESC, name", null)) {
+            while (cursor.moveToNext()) names.add(cursor.getString(0));
+        }
+        return names;
+    }
+
+    void renameTemporaryName(String oldName, String input) {
+        String name = input.trim();
+        if (name.isEmpty()) throw new IllegalArgumentException("Training name is empty");
+        SQLiteDatabase db = getWritableDatabase();
+        db.beginTransaction();
+        try {
+            long lastUsed;
+            try (Cursor cursor = db.rawQuery("SELECT MAX(last_used) FROM temporary_names WHERE name IN (?, ?)",
+                    new String[]{oldName, name})) {
+                cursor.moveToFirst();
+                lastUsed = cursor.getLong(0);
+            }
+            if (db.delete("temporary_names", "name = ?", new String[]{oldName}) == 1) {
+                saveTemporaryName(db, name, lastUsed);
+            }
+            db.setTransactionSuccessful();
+        } finally {
+            db.endTransaction();
+        }
+    }
+
+    void deleteTemporaryName(String name) {
+        getWritableDatabase().delete("temporary_names", "name = ?", new String[]{name});
+    }
+
+    private void saveTemporaryName(SQLiteDatabase db, String name, long lastUsed) {
+        ContentValues values = new ContentValues();
+        values.put("name", name);
+        values.put("last_used", lastUsed);
+        if (db.replaceOrThrow("temporary_names", null, values) == -1) {
+            throw new IllegalStateException("Training name could not be saved");
         }
     }
 
@@ -339,6 +422,7 @@ final class Store extends SQLiteOpenHelper {
         try {
             if (!hasDraft(draft.date, draft.plan.id)) throw new IllegalStateException("Workout no longer in progress");
             insertCheckIn(db, new Journal.Session(draft.date, draft.plan, true), seconds, draft.sets);
+            if (draft.plan.temporary) saveTemporaryName(db, draft.plan.name, System.currentTimeMillis());
             discardDraft(draft);
             db.setTransactionSuccessful();
         } finally {
@@ -348,7 +432,7 @@ final class Store extends SQLiteOpenHelper {
 
     List<Journal.SetLog> previousSets(String exercise, LocalDate date) {
         try (Cursor cursor = getReadableDatabase().rawQuery(
-                "SELECT day, plan_id, name, days, minutes, exercises, duration_seconds, set_logs FROM check_ins "
+                "SELECT " + CHECK_IN_COLUMNS + " FROM check_ins "
                         + "WHERE day <= ? AND set_logs != '[]' ORDER BY day DESC, finished_at DESC, plan_id DESC",
                 new String[]{date.toString()})) {
             while (cursor.moveToNext()) {
@@ -374,7 +458,7 @@ final class Store extends SQLiteOpenHelper {
 
     private static Journal.WorkoutDraft readDraft(Cursor cursor) {
         return new Journal.WorkoutDraft(LocalDate.parse(cursor.getString(0)), readPlan(cursor, 1), cursor.getLong(6),
-                cursor.getInt(7), cursor.getLong(8), decodeSets(cursor.getString(9)));
+                cursor.getInt(7), cursor.getLong(8), decodeSets(cursor.getString(9)), cursor.getLong(10), cursor.getInt(11));
     }
 
     private static ContentValues draftValues(Journal.WorkoutDraft draft) {
@@ -385,6 +469,8 @@ final class Store extends SQLiteOpenHelper {
         values.put("rest_seconds", draft.restSeconds);
         values.put("rest_until", draft.restUntil);
         values.put("set_logs", encodeSets(draft.sets));
+        values.put("set_started_at", draft.setStartedAt);
+        values.put("active_exercise_index", draft.activeExerciseIndex);
         return values;
     }
 
@@ -392,7 +478,7 @@ final class Store extends SQLiteOpenHelper {
         JSONArray encoded = new JSONArray();
         try {
             for (Journal.SetLog set : sets) {
-                encoded.put(new JSONArray().put(set.exerciseIndex).put(set.reps).put(set.loadKg));
+                encoded.put(new JSONArray().put(set.exerciseIndex).put(set.reps).put(set.loadKg).put(set.durationSeconds));
             }
             return encoded.toString();
         } catch (RuntimeException error) {
@@ -407,7 +493,7 @@ final class Store extends SQLiteOpenHelper {
             for (int i = 0; i < array.length(); i++) {
                 JSONArray set = array.getJSONArray(i);
                 sets.add(new Journal.SetLog(set.getInt(0), set.isNull(1) ? null : set.getInt(1),
-                        set.isNull(2) ? null : set.getDouble(2)));
+                        set.isNull(2) ? null : set.getDouble(2), set.isNull(3) ? null : set.getLong(3)));
             }
             return sets;
         } catch (JSONException error) {
@@ -431,8 +517,9 @@ final class Store extends SQLiteOpenHelper {
         } catch (JSONException error) {
             throw new IllegalStateException("Invalid exercise data in journal", error);
         }
-        return new Journal.Plan(cursor.getLong(index), cursor.getString(index + 1),
-                cursor.getInt(index + 2), cursor.getInt(index + 3), exercises);
+        long id = cursor.getLong(index);
+        return new Journal.Plan(id, cursor.getString(index + 1),
+                cursor.getInt(index + 2), cursor.getInt(index + 3), exercises, id < 0);
     }
 
     private static ContentValues planValues(Journal.Plan plan) {

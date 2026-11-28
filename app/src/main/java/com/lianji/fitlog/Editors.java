@@ -8,11 +8,13 @@ import android.graphics.drawable.ColorDrawable;
 import android.text.Editable;
 import android.text.InputFilter;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.text.TextWatcher;
 import android.view.Gravity;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
+import android.view.inputmethod.EditorInfo;
 import android.widget.Button;
 import android.widget.EditText;
 import android.widget.FrameLayout;
@@ -173,12 +175,10 @@ final class Editors {
     void editPlan(Journal.Plan plan, int numberField) {
         Panel panel = new Panel(plan == null ? "新建训练计划" : "编辑训练计划");
         if (plan == null) {
-            Button reset = ui.button("重置计划", WHITE, RED, LINE, () -> confirm("重置训练计划",
-                    "当前每周计划将替换为内置计划，自建、导入的计划及修改会被清除。\n已打卡的训练和训练草稿会保留。",
-                    "确认重置", RED, () -> save(panel, store::resetPlans, "已恢复内置训练计划")));
-            LinearLayout.LayoutParams resetSize = new LinearLayout.LayoutParams(WRAP, WRAP);
-            resetSize.leftMargin = ui.dp(8);
-            panel.header.addView(reset, resetSize);
+            Button temporary = ui.secondary("临时训练", () -> openTemporaryWorkout(panel));
+            LinearLayout.LayoutParams size = new LinearLayout.LayoutParams(WRAP, WRAP);
+            size.leftMargin = ui.dp(8);
+            panel.header.addView(temporary, size);
         }
         EditText name = input(panel, "例如 全身力量", plan == null ? "" : plan.name, InputType.TYPE_CLASS_TEXT, 40);
         field(panel.form, "计划名称", name, 0);
@@ -272,6 +272,97 @@ final class Editors {
         panel.show(focus);
     }
 
+    void resetPlans() {
+        confirm("重置训练计划",
+                "当前每周计划将替换为内置计划，自建、导入的计划及修改会被清除。\n已打卡的训练和训练草稿会保留。",
+                "确认重置", RED, () -> {
+                    if (!activity.write(store::resetPlans)) return false;
+                    activity.refresh();
+                    Toast.makeText(activity, "已恢复内置训练计划", Toast.LENGTH_SHORT).show();
+                    return true;
+                });
+    }
+
+    void openTemporaryWorkout() {
+        openTemporaryWorkout(null);
+    }
+
+    private void openTemporaryWorkout(Panel planEditor) {
+        Panel panel = new Panel("临时训练");
+        EditText name = input(panel, "例如 俯卧撑", "", InputType.TYPE_CLASS_TEXT, 40);
+        field(panel.form, "训练名称", name, 0);
+        LinearLayout history = ui.column();
+        List<String> names = store.temporaryNames();
+        showTemporaryNames(history, name, names);
+        ui.add(panel.form, history, 0);
+        Runnable start = () -> {
+            if (!panel.dialog.isShowing()) return;
+            String title = requiredName(panel, name);
+            if (title == null || !activity.startTemporaryWorkout(title)) return;
+            panel.dialog.dismiss();
+            if (planEditor != null) planEditor.dialog.dismiss();
+        };
+        name.setImeOptions(EditorInfo.IME_ACTION_GO);
+        name.setOnEditorActionListener((view, action, event) -> {
+            if (action != EditorInfo.IME_ACTION_GO) return false;
+            start.run();
+            return true;
+        });
+        panel.actions("开始训练", GREEN, start);
+        panel.show(names.isEmpty() ? name : null);
+    }
+
+    private void showTemporaryNames(LinearLayout history, EditText field, List<String> names) {
+        history.removeAllViews();
+        if (names.isEmpty()) return;
+        ui.add(history, ui.heading("最近使用", 14), 13);
+        for (String name : names) {
+            LinearLayout row = ui.row();
+            Button fill = ui.secondary(name, () -> {
+                field.setText(name);
+                field.setSelection(field.length());
+            });
+            fill.setMaxLines(2);
+            fill.setEllipsize(TextUtils.TruncateAt.END);
+            ui.weighted(row, fill, 1, 0);
+            Button edit = ui.button("编辑", BACKGROUND, MUTED, LINE, () -> editTemporaryName(name, updated -> {
+                if (field.getText().toString().trim().equals(name)) field.setText(updated);
+                showTemporaryNames(history, field, store.temporaryNames());
+            }));
+            edit.setContentDescription("编辑常用训练名称 " + name);
+            LinearLayout.LayoutParams editSize = new LinearLayout.LayoutParams(WRAP, WRAP);
+            editSize.leftMargin = ui.dp(6);
+            row.addView(edit, editSize);
+            ui.add(history, row, 6);
+        }
+    }
+
+    private void editTemporaryName(String original, Consumer<String> onChange) {
+        Panel panel = new Panel("编辑常用训练名称");
+        EditText name = input(panel, "例如 俯卧撑", original, InputType.TYPE_CLASS_TEXT, 40);
+        field(panel.form, "训练名称", name, 0);
+        ui.add(panel.form, ui.button("移除名称", WHITE, RED, LINE, () -> {
+            if (!activity.write(() -> store.deleteTemporaryName(original))) return;
+            panel.dialog.dismiss();
+            onChange.accept("");
+        }), 9);
+        panel.actions("保存", GREEN, () -> {
+            String title = requiredName(panel, name);
+            if (title == null || !activity.write(() -> store.renameTemporaryName(original, title))) return;
+            panel.dialog.dismiss();
+            onChange.accept(title);
+        });
+        panel.show(name);
+    }
+
+    private String requiredName(Panel panel, EditText field) {
+        String name = field.getText().toString().trim();
+        if (!name.isEmpty()) return name;
+        panel.error("请输入训练名称。");
+        field.requestFocus();
+        return null;
+    }
+
     private ExerciseInput addExercise(Panel panel, LinearLayout list, List<ExerciseInput> fields, Journal.Exercise exercise) {
         LinearLayout row = ui.row();
         EditText name = input(panel, "动作名称", exercise == null ? "" : exercise.name, InputType.TYPE_CLASS_TEXT, 40);
@@ -312,17 +403,19 @@ final class Editors {
         button.setTextColor(active ? WHITE : MUTED);
     }
 
-    void showCompleted(LocalDate date, Journal.Week week) {
+    void showCompleted(LocalDate date, Journal.Week week, boolean temporary) {
         Panel panel = new Panel("恭喜打卡成功！");
         LinearLayout summary = ui.row();
         FrameLayout badge = new FrameLayout(activity);
         badge.setBackground(ui.shape(LIME, 0, 15));
         badge.addView(ui.icon(Icon.CHECK, FOREST, 26), new FrameLayout.LayoutParams(ui.dp(26), ui.dp(26), Gravity.CENTER));
         summary.addView(badge, new LinearLayout.LayoutParams(ui.dp(50), ui.dp(50)));
-        boolean currentWeek = !date.isBefore(week.start);
+        boolean currentWeek = !temporary && !date.isBefore(week.start);
         int count = week.completed();
         int total = week.sessions.size();
-        String encouragement = currentWeek && total > 0 && count == total ? "本周训练全部完成！" : "又完成了一次训练！";
+        String encouragement = "又完成了一次训练！";
+        if (temporary) encouragement = "临时训练已完成！";
+        else if (currentWeek && total > 0 && count == total) encouragement = "本周训练全部完成！";
         ui.weighted(summary, ui.heading(encouragement, 17), 1, 13);
         ui.add(panel.form, summary, 4);
         if (currentWeek) {
